@@ -785,39 +785,45 @@ pub fn shortcuts(app: &AppRef) {
 }
 
 /// `<Control><Shift>s` -> `Ctrl+Shift+S`, arrows as glyphs, alternatives with `/`.
+///
+/// Kept pure on purpose: this is the kind of formatting that quietly regresses
+/// ("Ctrl+commA"), so it is covered by tests instead of only by eye.
 fn pretty_accel(accel: &str) -> String {
-    accel
-        .split_whitespace()
-        .map(|one| {
-            let mut out = one
-                .replace("<Control>", "Ctrl+")
-                .replace("<Shift>", "Shift+")
-                .replace("<Alt>", "Alt+")
-                .replace("<Super>", "Super+");
-            for (from, to) in [
-                ("Left", "\u{2190}"),
-                ("Right", "\u{2192}"),
-                ("Up", "\u{2191}"),
-                ("Down", "\u{2193}"),
-                ("Page_Up", "PgUp"),
-                ("Page_Down", "PgDn"),
-                ("comma", ","),
-                ("question", "?"),
-                ("Home", "Home"),
-                ("End", "End"),
-            ] {
-                if out.ends_with(from) && from.chars().next().is_some_and(|c| c.is_uppercase()) {
-                    out.truncate(out.len() - from.len());
-                    out.push_str(to);
-                }
-            }
-            if out.len() == 1 {
-                out = out.to_uppercase();
-            }
-            out
-        })
-        .collect::<Vec<_>>()
-        .join(" / ")
+    accel.split_whitespace().map(pretty_key).collect::<Vec<_>>().join(" / ")
+}
+
+fn pretty_key(one: &str) -> String {
+    let mut mods = String::new();
+    let mut rest = one;
+    for (tag, label) in [
+        ("<Control>", "Ctrl+"),
+        ("<Shift>", "Shift+"),
+        ("<Alt>", "Alt+"),
+        ("<Super>", "Super+"),
+    ] {
+        while let Some(stripped) = rest.strip_prefix(tag) {
+            mods.push_str(label);
+            rest = stripped;
+        }
+    }
+    let key = match rest {
+        "Left" => "\u{2190}",
+        "Right" => "\u{2192}",
+        "Up" => "\u{2191}",
+        "Down" => "\u{2193}",
+        "Page_Up" => "PgUp",
+        "Page_Down" => "PgDn",
+        "comma" => ",",
+        "question" => "?",
+        "space" => "Espaço",
+        other => other,
+    };
+    let key = if key.chars().count() == 1 {
+        key.to_uppercase()
+    } else {
+        key.to_string()
+    };
+    format!("{mods}{key}")
 }
 
 pub fn preferences(app: &AppRef) {
@@ -1232,4 +1238,35 @@ fn write_setlist(app: &AppRef, id: &str, parent: &adw::Dialog) {
         parent_c.close();
     });
     confirm.present(Some(parent));
+}
+
+#[cfg(test)]
+mod tests {
+    //! Tests for the parts of the window that need no display server. Anything that
+    //! builds a widget needs `gtk::init()` and a compositor, so the logic that can
+    //! silently regress — formatting, labelling, ordering — is kept pure and tested.
+    use super::pretty_accel;
+
+    #[test]
+    fn accelerators_become_readable_keys() {
+        assert_eq!(pretty_accel("<Control>s"), "Ctrl+S");
+        assert_eq!(pretty_accel("<Control><Shift>s"), "Ctrl+Shift+S");
+        assert_eq!(pretty_accel("F9"), "F9");
+        assert_eq!(pretty_accel("<Control>comma"), "Ctrl+,");
+        assert_eq!(pretty_accel("<Control>question"), "Ctrl+?");
+    }
+
+    #[test]
+    fn alternatives_are_joined() {
+        assert_eq!(
+            pretty_accel("<Control>Left <Control>Right"),
+            "Ctrl+\u{2190} / Ctrl+\u{2192}"
+        );
+        assert_eq!(pretty_accel("Page_Up Page_Down"), "PgUp / PgDn");
+    }
+
+    #[test]
+    fn single_letters_are_uppercased() {
+        assert_eq!(pretty_accel("s"), "S");
+    }
 }
