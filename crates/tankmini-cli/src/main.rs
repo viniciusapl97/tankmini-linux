@@ -106,6 +106,11 @@ enum Command {
         #[command(subcommand)]
         op: RawOp,
     },
+    /// Cabinet (IR) slots stored on the pedal: list, or save one to a file
+    Cab {
+        #[command(subcommand)]
+        op: CabOp,
+    },
     /// Live tuner: reads the pedal's USB audio and prints the detected note
     Tune {
         /// Reference pitch for A4 (default 440)
@@ -117,6 +122,21 @@ enum Command {
         /// Keep running until Ctrl+C instead of stopping after the first stable note
         #[arg(long = "watch")]
         watch: bool,
+    },
+}
+
+/// Cabinet slots live in type 5 at `0x70028000 + slot * 0x1000` (4096 bytes each),
+/// per `docs/protocol/app-findings.md`. Reading them is safe; writing is not
+/// implemented because the AM2 container format is still unknown.
+#[derive(Subcommand)]
+enum CabOp {
+    /// List the 20 cabinet slots with their name on the pedal
+    List,
+    /// Save one cabinet slot (4096 bytes) to a file
+    Read {
+        /// Slot 0-19
+        slot: usize,
+        file: PathBuf,
     },
 }
 
@@ -710,6 +730,83 @@ fn run(cli: Cli) -> Result<(), String> {
                     let (mut pedal, _) = open_device(cli.dev.clone())?;
                     store_patch(&mut pedal, index, &t.bytes(), "antes de aplicar som pronto")?;
                     println!("{} → {}", t.name, tankmini_core::SLOT_LABELS[index]);
+                }
+            }
+            Ok(())
+        }
+        Command::Cab { op } => {
+            let (mut pedal, _) = open_device(cli.dev.clone())?;
+            const BASE: u32 = 0x7002_8000;
+            const SLOT_LEN: usize = 0x1000;
+            let names: Vec<String> = pedal
+                .read(5, 0x8000_0000, 20 * 14)
+                .map_err(|e| e.to_string())?
+                .map(|raw| {
+                    (0..20)
+                        .map(|i| {
+                            let chunk = &raw[i * 14..(i + 1) * 14];
+                            let end = chunk.iter().position(|&b| b == 0).unwrap_or(14);
+                            String::from_utf8_lossy(&chunk[..end]).trim().to_string()
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            match op {
+                CabOp::List => {
+                    println!("slot  nome            primeiros bytes");
+                    for slot in 0..20usize {
+                        let addr = BASE + (slot as u32) * SLOT_LEN as u32;
+                        let head = pedal
+                            .read(5, addr, 12)
+                            .map_err(|e| e.to_string())?
+                            .map(|d| d.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" "))
+                            .unwrap_or_else(|| "error ACK".into());
+                        let name = names.get(slot).cloned().unwrap_or_default();
+                        println!("{slot:>4}  {name:<15} {head}");
+                    }
+                }
+                CabOp::Read { slot, file } => {
+                    if slot >= 20 {
+                        return Err("slot deve ser 0-19".into());
+                    }
+                    let addr = BASE + (slot as u32) * SLOT_LEN as u32;
+                    // The pedal answers with `error ACK` for large and for small
+                    // requests depending on the state it is in, so walk a ladder of
+                    // sizes and keep whatever it agrees to serve. What worked on the
+                    // bench is recorded in docs/protocol/app-findings.md.
+                    let mut data: Vec<u8> = Vec::with_capacity(SLOT_LEN);
+                    let mut chunk_size = 512usize;
+                    let mut off = 0usize;
+                    while off < SLOT_LEN {
+                        let want = chunk_size.min(SLOT_LEN - off);
+                        match pedal.read(5, addr + off as u32, want).map_err(|e| e.to_string())? {
+                            Some(chunk) if !chunk.is_empty() => {
+                                data.extend_from_slice(&chunk);
+                                off += chunk.len();
+                                std::thread::sleep(std::time::Duration::from_millis(30));
+                            }
+                            _ => {
+                                if chunk_size > 64 {
+                                    chunk_size /= 2;
+                                    continue;
+                                }
+                                return Err(format!(
+                                    "a pedaleira recusou a leitura em {} bytes (lidos até 0x{off:x}); \
+                                     o slot não está servindo leitura agora",
+                                    want
+                                )
+                                .into());
+                            }
+                        }
+                    }
+                    std::fs::write(&file, &data).map_err(|e| e.to_string())?;
+                    let non_zero = data.iter().filter(|&&b| b != 0).count();
+                    println!(
+                        "slot {slot} ({}): {} bytes, {non_zero} não-zero -> {}",
+                        names.get(slot).cloned().unwrap_or_default(),
+                        data.len(),
+                        file.display()
+                    );
                 }
             }
             Ok(())
