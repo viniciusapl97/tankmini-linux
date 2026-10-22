@@ -114,6 +114,7 @@ const TABLE: &[(&str, &str, &str)] = &[
     ("view.play", "Tocar", "Play"),
     ("view.edit", "Editar", "Edit"),
     ("view.tune", "Afinar", "Tune"),
+    ("view.community", "Comunidade", "Community"),
     // ---- blocks ----
     ("block.on", "Ligado", "On"),
     ("block.off", "Desligado", "Off"),

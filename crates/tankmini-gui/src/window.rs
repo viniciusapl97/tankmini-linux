@@ -68,6 +68,7 @@ pub fn build(app: &AppRef) {
         ("play", crate::i18n::t("view.play"), "Sons prontos e controles simples (Ctrl+1)"),
         ("edit", crate::i18n::t("view.edit"), "Todos os blocos e parâmetros (Ctrl+2)"),
         ("tune", crate::i18n::t("view.tune"), "Afinador cromático pela entrada USB (Ctrl+3)"),
+        ("community", crate::i18n::t("view.community"), "Amps e IRs compartilhados por outros usuários (Ctrl+4)"),
     ] {
         let t = crate::toggle::Toggle::new();
         t.set_name(Some(name));
@@ -87,7 +88,6 @@ pub fn build(app: &AppRef) {
     s1.append(Some("Trocar de lugar com…"), Some("win.swap-slots"));
     s1.append(Some("Importar IR (cab)…"), Some("win.import-ir"));
     s1.append(Some("Importar amp…"), Some("win.import-amp"));
-    s1.append(Some("Comunidade M-VAVE…"), Some("win.community"));
     s1.append(Some("Renomear…"), Some("win.rename"));
     menu.append_section(None, &s1);
     let s2 = gio::Menu::new();
@@ -188,6 +188,7 @@ pub fn build(app: &AppRef) {
     let tuner_shared = crate::tuner::Shared::new(440.0);
     crate::tuner::start(&tuner_shared);
     stack.add_named(&crate::tuner::page(app, &tuner_shared), Some("tune"));
+    stack.add_named(&crate::dialogs::community_page(app), Some("community"));
 
     let split = adw::OverlaySplitView::new();
     split.set_sidebar(Some(&rail));
@@ -416,6 +417,7 @@ fn wire(app: &AppRef) {
             let view = match g.active_name().as_deref() {
                 Some("edit") => View::Edit,
                 Some("tune") => View::Tune,
+                Some("community") => View::Community,
                 _ => View::Play,
             };
             {
@@ -579,6 +581,7 @@ fn install_actions(app: &AppRef) {
     add("view-play", Box::new(|a| a.ui().modes.set_active_name(Some("play"))));
     add("view-edit", Box::new(|a| a.ui().modes.set_active_name(Some("edit"))));
     add("view-tune", Box::new(|a| a.ui().modes.set_active_name(Some("tune"))));
+    add("view-community", Box::new(|a| a.ui().modes.set_active_name(Some("community"))));
     add("ab", Box::new(|a| {
         let on = !a.state.borrow().comparing;
         a.ui().ab_btn.set_active(on);
@@ -604,7 +607,6 @@ fn install_actions(app: &AppRef) {
     add("swap-slots", Box::new(crate::dialogs::swap_slots));
     add("import-ir", Box::new(crate::dialogs::import_ir));
     add("import-amp", Box::new(crate::dialogs::import_amp));
-    add("community", Box::new(crate::dialogs::community));
     add("rename", Box::new(crate::dialogs::rename));
     add("backups", Box::new(crate::dialogs::backups));
     add("factory", Box::new(crate::dialogs::factory));
@@ -626,6 +628,7 @@ fn install_actions(app: &AppRef) {
         ("win.view-play", &["<Control>1"]),
         ("win.view-edit", &["<Control>2"]),
         ("win.view-tune", &["<Control>3"]),
+        ("win.view-community", &["<Control>4"]),
         ("win.ab", &["<Control>b"]),
         ("win.bypass", &["<Control><Shift>b"]),
         ("win.search", &["<Control>f"]),
@@ -650,6 +653,7 @@ pub fn refresh(app: &AppRef) {
     ui.modes.set_active_name(Some(match view {
         View::Edit => "edit",
         View::Tune => "tune",
+        View::Community => "community",
         View::Play => "play",
     }));
     ui.rail_tabs.set_active_name(Some(match rail {
@@ -657,7 +661,10 @@ pub fn refresh(app: &AppRef) {
         RailTab::Library => "library",
         RailTab::Setlists => "setlists",
     }));
-    if !has_table {
+    if view == View::Community {
+        // Needs the internet, not the pedal.
+        ui.stack.set_visible_child_name("community");
+    } else if !has_table {
         ui.stack.set_visible_child_name("welcome");
     } else {
         match view {
@@ -668,6 +675,7 @@ pub fn refresh(app: &AppRef) {
             View::Tune => {
                 ui.stack.set_visible_child_name("tune");
             }
+            View::Community => {}
             View::Edit => {
                 crate::edit::refresh(app);
                 ui.stack.set_visible_child_name("edit");

@@ -1671,21 +1671,23 @@ pub fn amp_dialog(app: &AppRef, path: &std::path::Path, model: amp::Model) {
     dialog.present(Some(&app.window.clone()));
 }
 
-/// Browse the M-VAVE community: search shared amp models and IRs, download
-/// one and open it in the import dialog. Network calls run on a thread.
-pub fn community(app: &AppRef) {
+/// The "Comunidade" tab: search the M-VAVE community's shared amp models and
+/// IRs, download one and open it in the import dialog. Network calls run on
+/// a thread; nothing is fetched until the tab is first shown. Works without
+/// the pedal connected.
+pub fn community_page(app: &AppRef) -> gtk::Widget {
     use tankmini_core::community::{self, Kind, Post, Sort};
 
-    let dialog = adw::Dialog::new();
-    dialog.set_title("Comunidade M-VAVE");
-    dialog.set_content_width(640);
-    dialog.set_content_height(720);
-
     let page = vbox(12);
-    page.set_margin_top(12);
-    page.set_margin_bottom(18);
-    page.set_margin_start(18);
-    page.set_margin_end(18);
+    page.set_margin_top(28);
+    page.set_margin_bottom(28);
+    page.set_margin_start(28);
+    page.set_margin_end(28);
+
+    let head = vbox(4);
+    head.append(&label("COMUNIDADE M-VAVE", &["tm-eyebrow"]));
+    head.append(&label("Amps e caixas de outros músicos", &["tm-title-l"]));
+    page.append(&head);
 
     let intro = label(
         "Amps e IRs compartilhados por outros usuários. Esta pedaleira importa amps (AM2, AM3, AM4) e IRs em WAV; AM2 é o formato dos amps dela.",
@@ -1727,17 +1729,11 @@ pub fn community(app: &AppRef) {
         .build();
     page.append(&scroll);
 
-    let tv = adw::ToolbarView::new();
-    tv.add_top_bar(&adw::HeaderBar::new());
-    tv.set_content(Some(&page));
-    dialog.set_child(Some(&tv));
-
     // Page state: (query, sort, page loaded so far, generation to drop stale replies).
     let state = Rc::new(std::cell::RefCell::new((String::new(), Sort::Popular, 0u32, 0u64)));
 
     let open_file = {
         let app = app.clone();
-        let dialog = dialog.clone();
         move |post: &Post, file: &community::File, button: &gtk::Button| {
             button.set_sensitive(false);
             button.set_label("Baixando…");
@@ -1758,7 +1754,6 @@ pub fn community(app: &AppRef) {
             let app = app.clone();
             let button = button.clone();
             let kind = file.kind;
-            let parent = dialog.clone();
             glib::spawn_future_local(async move {
                 button.set_sensitive(true);
                 button.set_label("Abrir");
@@ -1770,11 +1765,8 @@ pub fn community(app: &AppRef) {
                             Kind::Ir => ir::parse_wav(&bytes).map(|w| ir_dialog(&app, &path, w)),
                             Kind::Other => Err("tipo não suportado".into()),
                         };
-                        match opened {
-                            Ok(()) => {
-                                parent.close();
-                            }
-                            Err(e) => app.toast(&format!("Arquivo recusado: {e}")),
+                        if let Err(e) = opened {
+                            app.toast(&format!("Arquivo recusado: {e}"));
                         }
                     }
                     Ok(Err(e)) => app.toast(&e),
@@ -1911,6 +1903,16 @@ pub fn community(app: &AppRef) {
         let load = load.clone();
         more.connect_clicked(move |_| load(true));
     }
-    load(false);
-    dialog.present(Some(&app.window.clone()));
+    {
+        let loaded = Rc::new(Cell::new(false));
+        page.connect_map(move |_| {
+            if !loaded.replace(true) {
+                load(false);
+            }
+        });
+    }
+    let clamp = adw::Clamp::new();
+    clamp.set_maximum_size(900);
+    clamp.set_child(Some(&page));
+    clamp.upcast()
 }

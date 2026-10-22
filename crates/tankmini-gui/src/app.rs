@@ -67,6 +67,7 @@ pub enum View {
     Play,
     Edit,
     Tune,
+    Community,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
