@@ -1,0 +1,37 @@
+app-id: dev.v1ni.TankMini
+runtime: org.gnome.Platform
+runtime-version: '47'
+sdk: org.gnome.Sdk
+command: tankmini-gui
+
+finish-args:
+  # USB access to the pedal (MIDI + audio interface) and the USB device node
+  - --device=all
+  # Audio: capture for the tuner, playback for monitoring
+  - --socket=pulseaudio
+  - --share=network
+  - --filesystem=~/.local/share/tankmini:create
+  - --filesystem=~/.config/tankmini:create
+  - --talk-name=org.freedesktop.Flatpak
+
+cleanup:
+  - /include
+  - /lib/pkgconfig
+  - /share/man
+  - '*.a'
+  - '*.la'
+
+modules:
+  - name: tankmini-linux
+    buildsystem: simple
+    build-commands:
+      # A real build needs the crates vendored (flatpak-cargo-generator), because the
+      # sandbox has no network. See packaging/README.md.
+      - cargo build --release --offline -p tankmini-cli -p tankmini-gui
+      - install -Dm755 target/release/tankmini /app/bin/tankmini
+      - install -Dm755 target/release/tankmini-gui /app/bin/tankmini-gui
+      - install -Dm644 data/dev.v1ni.TankMini.desktop /app/share/applications/dev.v1ni.TankMini.desktop
+      - install -Dm644 LICENSE /app/share/licenses/dev.v1ni.TankMini/LICENSE
+    sources:
+      - type: dir
+        path: ..

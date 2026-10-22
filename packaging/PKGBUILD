@@ -1,0 +1,32 @@
+# Maintainer: Vini <viniciusapl97@users.noreply.github.com>
+pkgname=tankmini-linux
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Native control app for the M-VAVE TANK MINI pedal (USB-MIDI, reverse engineered)"
+arch=('x86_64' 'aarch64')
+url="https://github.com/viniciusapl97/tankmini-linux"
+license=('MIT')
+depends=('gtk4' 'libadwaita' 'glib2' 'pango' 'cairo')
+makedepends=('cargo' 'rust' 'pkgconf')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+    cd "$pkgname-$pkgver"
+    export RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-stable}"
+    cargo build --release --locked -p tankmini-cli -p tankmini-gui
+}
+
+package() {
+    cd "$pkgname-$pkgver"
+    install -Dm755 target/release/tankmini "$pkgdir/usr/bin/tankmini"
+    install -Dm755 target/release/tankmini-gui "$pkgdir/usr/bin/tankmini-gui"
+    install -Dm644 data/dev.v1ni.TankMini.desktop \
+        "$pkgdir/usr/share/applications/dev.v1ni.TankMini.desktop"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+    # The protocol notes ship with the package: they are the reference for anyone
+    # poking at the pedal with the CLI.
+    install -d "$pkgdir/usr/share/doc/$pkgname/protocol"
+    install -Dm644 docs/protocol/*.md "$pkgdir/usr/share/doc/$pkgname/protocol/"
+}
