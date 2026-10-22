@@ -9,6 +9,7 @@ pub mod catalog;
 pub mod device;
 pub mod discovery;
 pub mod frame;
+pub mod names;
 pub mod patch;
 pub mod preset;
 pub mod sys7;
@@ -17,6 +18,7 @@ pub mod transport;
 pub use device::{DeviceInfo, Pedal};
 pub use discovery::{find_devices, Device};
 pub use frame::Frame;
+pub use names::PresetNames;
 pub use patch::{Patch, PresetTable, PATCH_COUNT, PATCH_LEN, SLOT_LABELS};
 pub use preset::{Preset, Record, PRESET_LEN, RECORD_LEN, RECORD_COUNT};
 

@@ -65,6 +65,24 @@ enum Command {
     },
     /// Commit the working preset table to the pedal's flash
     Save,
+    /// Set or show the local name of a preset (names are stored on the computer)
+    Name {
+        index: usize,
+        /// New name; omit to clear it
+        name: Option<String>,
+    },
+    /// Export one preset (92 bytes) or the whole table to a file
+    Export {
+        /// Preset index 0-20, or "all" for the whole table
+        index: String,
+        file: PathBuf,
+    },
+    /// Import a preset file (92 bytes) into a slot, or a table (1942 bytes)
+    Import { index: usize, file: PathBuf },
+    /// Copy a preset to another slot (in RAM; use `save` to persist)
+    Copy { from: usize, to: usize },
+    /// Restore the factory preset table and commit it to flash
+    Factory,
     /// Print the 32 cab/amp names stored on the pedal
     Names,
     /// Raw protocol access: read/write a memory region
@@ -357,6 +375,83 @@ fn run(cli: Cli) -> Result<(), String> {
                 Some(other) => println!("flash recusou a gravação (ack 0x{other:02x})"),
                 None => println!("sem resposta ao comando de gravação"),
             }
+            Ok(())
+        }
+        Command::Name { index, name } => {
+            let mut names = tankmini_core::PresetNames::load_default();
+            match name {
+                Some(n) => {
+                    names.set(index, &n);
+                    names.save_default().map_err(|e| e.to_string())?;
+                    println!("{} = {}", names.label(index), n);
+                }
+                None => println!("{}", names.label(index)),
+            }
+            Ok(())
+        }
+        Command::Export { index, file } => {
+            let (mut pedal, _) = open_device(cli.dev.clone())?;
+            let table = pedal.read_table().map_err(|e| e.to_string())?.ok_or("sem tabela")?;
+            let bytes = if index == "all" {
+                table.raw().to_vec()
+            } else {
+                let i: usize = index.parse().map_err(|_| "índice inválido")?;
+                table.patch(i).ok_or("índice fora da faixa")?.raw().to_vec()
+            };
+            std::fs::write(&file, &bytes).map_err(|e| e.to_string())?;
+            println!("{} bytes -> {}", bytes.len(), file.display());
+            Ok(())
+        }
+        Command::Import { index, file } => {
+            let bytes = std::fs::read(&file).map_err(|e| e.to_string())?;
+            let (mut pedal, _) = open_device(cli.dev.clone())?;
+            let mut table = pedal.read_table().map_err(|e| e.to_string())?.ok_or("sem tabela")?;
+            table.import(index, &bytes)?;
+            let store = BackupStore::new(BackupStore::default_root());
+            let path = store
+                .save(&pedal.read_table().map_err(|e| e.to_string())?.ok_or("sem tabela")?.to_preset(), None, "antes de importar")
+                .map_err(|e| e.to_string())?;
+            println!("backup: {}", path.display());
+            let report = pedal.write_table(&table).map_err(|e| e.to_string())?;
+            let commit = pedal.commit().map_err(|e| e.to_string())?.unwrap_or(0xff);
+            println!(
+                "importado: {} bytes, verificado={}, commit=0x{commit:02x}",
+                bytes.len(),
+                report.verified
+            );
+            Ok(())
+        }
+        Command::Copy { from, to } => {
+            let (mut pedal, _) = open_device(cli.dev.clone())?;
+            let mut table = pedal.read_table().map_err(|e| e.to_string())?.ok_or("sem tabela")?;
+            if !table.copy_patch(from, to) {
+                return Err("índices inválidos (0-20, origem ≠ destino)".into());
+            }
+            let report = pedal.write_table(&table).map_err(|e| e.to_string())?;
+            let commit = pedal.commit().map_err(|e| e.to_string())?.unwrap_or(0xff);
+            println!(
+                "copiado {} -> {}: verificado={}, commit=0x{commit:02x}",
+                from, to, report.verified
+            );
+            Ok(())
+        }
+        Command::Factory => {
+            let (mut pedal, _) = open_device(cli.dev.clone())?;
+            let factory = tankmini_core::PresetTable::factory();
+            let store = BackupStore::new(BackupStore::default_root());
+            if let Some(current) = pedal.read_table().map_err(|e| e.to_string())? {
+                let path = store
+                    .save(&current.to_preset(), None, "antes de restaurar de fábrica")
+                    .map_err(|e| e.to_string())?;
+                println!("backup: {}", path.display());
+            }
+            let report = pedal.write_table(&factory).map_err(|e| e.to_string())?;
+            let commit = pedal.commit().map_err(|e| e.to_string())?.unwrap_or(0xff);
+            println!(
+                "fábrica: verificado={}, commit=0x{commit:02x}, igual à referência={}",
+                report.verified,
+                factory.is_factory()
+            );
             Ok(())
         }
         Command::Names => {

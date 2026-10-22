@@ -16,7 +16,11 @@ built on a reverse-engineered USB-MIDI protocol instead of the official M-EFCS a
 | Save to flash (`WRITE 0xF0000000`, empty body) | verified across a power cycle; `tankmini save` + GUI |
 | Preset table structure (21 × 92 B, chain, 36 params) | verified, see `docs/protocol/preset-map.md` |
 | Module roles, effect variants, parameter names | recovered from the app; see `docs/protocol/preset-map.md` |
-| CLI (`tankmini`) | working: devices, identify, dump, show, slot, apply, restore, backups, names, raw |
+| Local preset names (sidecar `names.tsv`) | working; editable in the GUI and via `tankmini name` |
+| Export / import a single preset (`.tankmini`, 92 B) | working in GUI and CLI, with backup + commit |
+| Copy a preset to another slot | working (`tankmini copy`, GUI menu) |
+| Factory reset (embedded factory table) | working (`tankmini factory`, GUI menu, with confirmation) |
+| CLI (`tankmini`) | devices, identify, dump, show, patch, slot, apply, restore, backups, names, save, name, export, import, copy, factory, raw |
 | GTK4 app (`tankmini-gui`) | running: preset list, 6-chain editor, 36 sliders per preset, backup/restore, hex tab |
 
 ## Hardware
@@ -30,6 +34,7 @@ built on a reverse-engineered USB-MIDI protocol instead of the official M-EFCS a
 ```
 docs/protocol/   protocol notes, one file per topic (evidence-marked)
 docs/specs/      specs, written before implementation
+assets/          factory-table.bin (byte-exact factory dump of this firmware)
 tools/           probing / capture tooling (Python, stdlib only)
 captures/        raw dumps and extracted app assets (git-ignored)
 ```

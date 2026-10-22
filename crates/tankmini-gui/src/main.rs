@@ -14,10 +14,11 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use gtk::prelude::*;
-use gtk::{gdk, glib, Application, ApplicationWindow, Box as GtkBox, Orientation};
+use gtk::{gdk, gio, glib, Application, ApplicationWindow, Box as GtkBox, Orientation};
 use tankmini_core::backup::BackupStore;
 use tankmini_core::catalog::{self, Role};
 use tankmini_core::discovery::find_pedal;
+use tankmini_core::names::PresetNames;
 use tankmini_core::patch::{Patch, PresetTable, PATCH_COUNT, SLOT_LABELS};
 use tankmini_core::Pedal;
 
@@ -135,7 +136,8 @@ struct State {
     active_slot: Option<u8>,
     firmware: String,
     node: String,
-    names: Vec<String>,
+    cab_names: Vec<String>,
+    preset_names: PresetNames,
 }
 
 impl State {
@@ -167,6 +169,14 @@ struct Ui {
     restore: gtk::Button,
     play: gtk::Button,
     connect: gtk::Button,
+    rename: gtk::MenuButton,
+    rename_entry: gtk::Entry,
+    rename_save: gtk::Button,
+    export_btn: gtk::Button,
+    import_btn: gtk::Button,
+    copy_target: gtk::DropDown,
+    copy_confirm: gtk::Button,
+    factory_btn: gtk::Button,
 }
 
 fn set_status(ui: &Ui, text: &str) {
@@ -205,7 +215,7 @@ fn load_from_device(state: &Shared) -> Result<(), String> {
     st.node = node;
     st.active_slot = active;
     st.selected = active.unwrap_or(0) as usize;
-    st.names = names;
+    st.cab_names = names;
     st.original = Some(table.clone());
     st.table = Some(table);
     Ok(())
@@ -335,7 +345,7 @@ fn refresh(ui: &Ui, state: &Shared, suppress: &Rc<Cell<bool>>) {
                 let title = gtk::Label::new(None);
                 title.set_markup(&format!(
                     "<b>{}</b>{}",
-                    patch.label(),
+                    gtk::glib::markup_escape_text(&st.preset_names.label(i)),
                     if active {
                         "  <span foreground='#6ee7b7' size='small'>● tocando</span>"
                     } else {
@@ -377,7 +387,7 @@ fn refresh(ui: &Ui, state: &Shared, suppress: &Rc<Cell<bool>>) {
                 let active = st.active_slot.map(|s| s as usize) == Some(st.selected);
                 ui.preset_title.set_markup(&format!(
                     "<span size='xx-large' weight='bold'>{}</span>",
-                    patch.label()
+                    gtk::glib::markup_escape_text(&st.preset_names.label(st.selected))
                 ));
                 ui.preset_sub.set_text(if active {
                     "Tocando agora na pedaleira"
@@ -407,7 +417,7 @@ fn refresh(ui: &Ui, state: &Shared, suppress: &Rc<Cell<bool>>) {
                         "<span foreground='{}'>●</span>  <b>{}</b>  {}",
                         palette::for_role(role),
                         pos + 1,
-                        gtk::glib::markup_escape_text(&patch.effect_name(*module as usize, &st.names))
+                        gtk::glib::markup_escape_text(&patch.effect_name(*module as usize, &st.cab_names))
                     ));
                     chip.add_css_class("chain-chip");
                     chip.set_tooltip_text(Some(role.hint()));
@@ -421,7 +431,7 @@ fn refresh(ui: &Ui, state: &Shared, suppress: &Rc<Cell<bool>>) {
                     }
                 }
                 for (pos, module) in chain.iter().enumerate() {
-                    let card = module_card(state, suppress, ui, st.selected, pos, *module as usize, &patch, &st.names);
+                    let card = module_card(state, suppress, ui, st.selected, pos, *module as usize, &patch, &st.cab_names);
                     ui.modules_box.append(&card);
                 }
                 ui.hex_view.buffer().set_text(&hexdump(patch.raw()));
@@ -723,6 +733,53 @@ fn build_window(app: &Application) -> (ApplicationWindow, Ui, Shared) {
             dialog.present();
         });
     }
+    // Overflow menu: the power features stay one click away without cluttering
+    // the main flow.
+    let menu_button = gtk::MenuButton::new();
+    menu_button.set_icon_name("open-menu-symbolic");
+    menu_button.set_tooltip_text(Some("Mais ações"));
+    let menu_box = GtkBox::new(Orientation::Vertical, 2);
+    menu_box.set_margin_top(6);
+    menu_box.set_margin_bottom(6);
+    menu_box.set_margin_start(6);
+    menu_box.set_margin_end(6);
+    let export_btn = gtk::Button::with_label("Exportar preset…");
+    let import_btn = gtk::Button::with_label("Importar preset…");
+    let copy_btn = gtk::MenuButton::builder()
+        .label("Copiar para outro slot…")
+        .build();
+    let factory_btn = gtk::Button::with_label("Restaurar de fábrica…");
+    for b in [&export_btn, &import_btn, &factory_btn] {
+        b.add_css_class("flat");
+        b.set_halign(gtk::Align::Fill);
+        menu_box.append(b);
+    }
+    copy_btn.add_css_class("flat");
+    copy_btn.set_halign(gtk::Align::Fill);
+    menu_box.append(&copy_btn);
+    let menu_popover = gtk::Popover::new();
+    menu_popover.set_child(Some(&menu_box));
+
+    // Copy dialog: pick the destination slot.
+    let copy_labels: Vec<String> = (0..PATCH_COUNT)
+        .map(|i| SLOT_LABELS.get(i).copied().unwrap_or("?").to_string())
+        .collect();
+    let copy_refs: Vec<&str> = copy_labels.iter().map(String::as_str).collect();
+    let copy_target = gtk::DropDown::from_strings(&copy_refs);
+    let copy_confirm = gtk::Button::with_label("Copiar");
+    copy_confirm.add_css_class("primary");
+    let copy_row = GtkBox::new(Orientation::Horizontal, 6);
+    copy_row.set_margin_top(8);
+    copy_row.set_margin_bottom(8);
+    copy_row.set_margin_start(8);
+    copy_row.set_margin_end(8);
+    copy_row.append(&copy_target);
+    copy_row.append(&copy_confirm);
+    let copy_popover = gtk::Popover::new();
+    copy_popover.set_child(Some(&copy_row));
+    copy_btn.set_popover(Some(&copy_popover));
+    menu_button.set_popover(Some(&menu_popover));
+    header.pack_end(&menu_button);
     header.pack_end(&pill);
     header.pack_end(&about);
     window.set_titlebar(Some(&header));
@@ -819,8 +876,31 @@ fn build_window(app: &Application) -> (ApplicationWindow, Ui, Shared) {
     preset_sub.set_margin_top(3);
     hero_text.append(&preset_title);
     hero_text.append(&preset_sub);
+    let rename = gtk::MenuButton::builder().label("Renomear").build();
+    rename.add_css_class("ghost");
+    rename.add_css_class("flat");
+    rename.set_valign(gtk::Align::Center);
+    let rename_entry = gtk::Entry::new();
+    rename_entry.set_placeholder_text(Some("Ex.: Crunch da música X"));
+    rename_entry.set_width_chars(22);
+    let rename_save = gtk::Button::with_label("Salvar");
+    rename_save.add_css_class("primary");
+    let rename_row = GtkBox::new(Orientation::Horizontal, 6);
+    rename_row.set_margin_top(8);
+    rename_row.set_margin_bottom(8);
+    rename_row.set_margin_start(8);
+    rename_row.set_margin_end(8);
+    rename_row.append(&rename_entry);
+    rename_row.append(&rename_save);
+    let rename_popover = gtk::Popover::new();
+    rename_popover.set_child(Some(&rename_row));
+    rename.set_popover(Some(&rename_popover));
+    let hero_spacer = GtkBox::new(Orientation::Horizontal, 0);
+    hero_spacer.set_hexpand(true);
     hero.append(&hero_art);
     hero.append(&hero_text);
+    hero.append(&hero_spacer);
+    hero.append(&rename);
     centre.append(&hero);
 
     let chain_box = GtkBox::new(Orientation::Horizontal, 6);
@@ -933,6 +1013,14 @@ fn build_window(app: &Application) -> (ApplicationWindow, Ui, Shared) {
         restore,
         play,
         connect,
+        rename,
+        rename_entry,
+        rename_save,
+        export_btn,
+        import_btn,
+        copy_target,
+        copy_confirm,
+        factory_btn,
     };
     let state: Shared = Rc::new(RefCell::new(State {
         table: None,
@@ -941,13 +1029,14 @@ fn build_window(app: &Application) -> (ApplicationWindow, Ui, Shared) {
         active_slot: None,
         firmware: String::new(),
         node: String::new(),
-        names: Vec::new(),
+        cab_names: Vec::new(),
+        preset_names: PresetNames::load_default(),
     }));
 
     (window, ui, state)
 }
 
-fn connect(ui: &Ui, state: &Shared, suppress: &Rc<Cell<bool>>) {
+fn connect(ui: &Ui, state: &Shared, suppress: &Rc<Cell<bool>>, window: &ApplicationWindow) {
     {
         let ui_c = ui.clone();
         let state = state.clone();
@@ -1111,6 +1200,185 @@ fn connect(ui: &Ui, state: &Shared, suppress: &Rc<Cell<bool>>) {
             refresh(&ui_c, &state, &suppress);
         });
     }
+    // Rename the selected preset (names live on the computer — the pedal has none).
+    {
+        let ui_c = ui.clone();
+        let state = state.clone();
+        let suppress = suppress.clone();
+        ui.clone().rename_save.connect_clicked(move |_| {
+            let name = ui_c.rename_entry.text().to_string();
+            let selected = {
+                let mut st = state.borrow_mut();
+                let selected = st.selected;
+                st.preset_names.set(selected, &name);
+                let _ = st.preset_names.save_default();
+                selected
+            };
+            set_status(&ui_c, &format!("Preset {selected} renomeado."));
+            if let Some(popover) = ui_c.rename.popover() {
+                popover.popdown();
+            }
+            refresh(&ui_c, &state, &suppress);
+        });
+    }
+
+    // Export the selected preset to a file.
+    {
+        let ui_c = ui.clone();
+        let state = state.clone();
+        let window_c = window.clone();
+        ui.clone().export_btn.connect_clicked(move |_| {
+            let (bytes, suggested) = {
+                let st = state.borrow();
+                let Some(table) = st.table.as_ref() else { return };
+                let Some(patch) = table.patch(st.selected) else { return };
+                let label = st.preset_names.label(st.selected).replace([' ', '·'], "-");
+                (patch.raw().to_vec(), format!("{label}.tankmini"))
+            };
+            let dialog = gtk::FileDialog::builder()
+                .title("Exportar preset")
+                .initial_name(&suggested)
+                .build();
+            let ui_c2 = ui_c.clone();
+            dialog.save(Some(&window_c), gio::Cancellable::NONE, move |result| {
+                if let Ok(file) = result {
+                    if let Some(path) = file.path() {
+                        match std::fs::write(&path, &bytes) {
+                            Ok(()) => set_status(&ui_c2, &format!("Preset salvo em {}", path.display())),
+                            Err(e) => set_status(&ui_c2, &format!("Falha ao salvar: {e}")),
+                        }
+                    }
+                }
+            });
+        });
+    }
+
+    // Import a preset file (92 bytes) or a whole table (1942 bytes).
+    {
+        let ui_c = ui.clone();
+        let state = state.clone();
+        let suppress = suppress.clone();
+        let window_c = window.clone();
+        ui.clone().import_btn.connect_clicked(move |_| {
+            let dialog = gtk::FileDialog::builder().title("Importar preset").build();
+            let ui_c2 = ui_c.clone();
+            let state_c = state.clone();
+            let suppress_c = suppress.clone();
+            dialog.open(Some(&window_c), gio::Cancellable::NONE, move |result| {
+                let Ok(file) = result else { return };
+                let Some(path) = file.path() else { return };
+                let bytes = match std::fs::read(&path) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        set_status(&ui_c2, &format!("Falha ao ler: {e}"));
+                        return;
+                    }
+                };
+                let selected = state_c.borrow().selected;
+                let outcome = {
+                    let mut st = state_c.borrow_mut();
+                    match st.table.as_mut() {
+                        Some(t) => t.import(selected, &bytes),
+                        None => Err("sem tabela carregada".to_string()),
+                    }
+                };
+                match outcome {
+                    Ok(()) => set_status(&ui_c2, "Importado. Confira e clique em Salvar na pedaleira."),
+                    Err(e) => set_status(&ui_c2, &format!("Importação recusada: {e}")),
+                }
+                refresh(&ui_c2, &state_c, &suppress_c);
+            });
+        });
+    }
+
+    // Copy the selected preset onto another slot.
+    {
+        let ui_c = ui.clone();
+        let state = state.clone();
+        let suppress = suppress.clone();
+        ui.clone().copy_confirm.connect_clicked(move |_| {
+            let target = ui_c.copy_target.selected() as usize;
+            let (from, ok) = {
+                let mut st = state.borrow_mut();
+                let from = st.selected;
+                let ok = st.table.as_mut().map(|t| t.copy_patch(from, target)).unwrap_or(false);
+                (from, ok)
+            };
+            if ok {
+                set_status(
+                    &ui_c,
+                    &format!(
+                        "Copiado de {} para {}. Salve para gravar na pedaleira.",
+                        SLOT_LABELS.get(from).copied().unwrap_or("?"),
+                        SLOT_LABELS.get(target).copied().unwrap_or("?")
+                    ),
+                );
+            } else {
+                set_status(&ui_c, "Escolha um slot de destino diferente do atual.");
+            }
+            refresh(&ui_c, &state, &suppress);
+        });
+    }
+
+    // Factory reset: back to the table this firmware shipped with.
+    {
+        let ui_c = ui.clone();
+        let state = state.clone();
+        let suppress = suppress.clone();
+        let window_c = window.clone();
+        ui.clone().factory_btn.connect_clicked(move |_| {
+            let dialog = gtk::MessageDialog::builder()
+                .transient_for(&window_c)
+                .modal(true)
+                .message_type(gtk::MessageType::Warning)
+                .buttons(gtk::ButtonsType::Cancel)
+                .text("Restaurar de fábrica?")
+                .secondary_text(
+                    "Os 21 presets voltam ao estado de fábrica e a pedaleira grava isso na memória.                      Um backup do estado atual é criado antes.",
+                )
+                .build();
+            dialog.add_button("Restaurar", gtk::ResponseType::Accept);
+            let ui_c2 = ui_c.clone();
+            let state_c = state.clone();
+            let suppress_c = suppress.clone();
+            dialog.connect_response(move |dialog, response| {
+                dialog.close();
+                if response != gtk::ResponseType::Accept {
+                    return;
+                }
+                let factory = PresetTable::factory();
+                let result = with_pedal(|pedal| {
+                    if let Some(current) = pedal.read_table().map_err(|e| e.to_string())? {
+                        let store = BackupStore::new(BackupStore::default_root());
+                        let path = store
+                            .save(&current.to_preset(), None, "antes de restaurar de fábrica")
+                            .map_err(|e| e.to_string())?;
+                        eprintln!("[tankmini] backup: {}", path.display());
+                    }
+                    let report = pedal.write_table(&factory).map_err(|e| e.to_string())?;
+                    let commit = pedal.commit().map_err(|e| e.to_string())?.unwrap_or(0xff);
+                    Ok((report, commit))
+                });
+                match result {
+                    Ok((report, 0)) if report.verified => {
+                        set_status(&ui_c2, "Pedaleira restaurada de fábrica.");
+                        let _ = load_from_device(&state_c);
+                    }
+                    Ok((report, commit)) => set_status(
+                        &ui_c2,
+                        &format!(
+                            "Restauração incompleta (verificado: {}, commit 0x{commit:02x}).",
+                            report.verified
+                        ),
+                    ),
+                    Err(e) => set_status(&ui_c2, &format!("Falha ao restaurar: {e}")),
+                }
+                refresh(&ui_c2, &state_c, &suppress_c);
+            });
+            dialog.present();
+        });
+    }
+
     {
         let ui_c = ui.clone();
         let state = state.clone();
@@ -1148,7 +1416,7 @@ fn main() -> glib::ExitCode {
     app.connect_activate(move |app| {
         let (window, ui, state) = build_window(app);
         let suppress: Rc<Cell<bool>> = Rc::new(Cell::new(false));
-        connect(&ui, &state, &suppress);
+        connect(&ui, &state, &suppress, &window);
 
         match load_from_device(&state) {
             Ok(()) => set_status(&ui, "Pedaleira conectada."),

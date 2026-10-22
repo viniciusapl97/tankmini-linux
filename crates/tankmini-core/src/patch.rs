@@ -231,6 +231,52 @@ impl PresetTable {
         self.set_chain(patch, chain)
     }
 
+    /// Byte-identical factory table for this firmware (`TANK MINI_004`), captured
+    /// from the unit before any write and shipped as a 1942-byte asset.
+    pub fn factory() -> Self {
+        let raw = include_bytes!("../../../assets/factory-table.bin").to_vec();
+        Self::from_raw(raw).expect("embedded factory table is valid")
+    }
+
+    pub fn is_factory(&self) -> bool {
+        self.raw == Self::factory().raw
+    }
+
+    /// Copy one preset onto another slot (bank/footswitch copy, like the pedal
+    /// does with the footswitches).
+    pub fn copy_patch(&mut self, from: usize, to: usize) -> bool {
+        if from >= PATCH_COUNT || to >= PATCH_COUNT || from == to {
+            return false;
+        }
+        let src = self.raw[from * PATCH_LEN..(from + 1) * PATCH_LEN].to_vec();
+        self.raw[to * PATCH_LEN..(to + 1) * PATCH_LEN].copy_from_slice(&src);
+        true
+    }
+
+    /// Import bytes into a slot. Accepts a single 92-byte preset or a whole
+    /// 1942-byte table.
+    pub fn import(&mut self, slot: usize, bytes: &[u8]) -> Result<(), String> {
+        if bytes.len() == PATCH_LEN {
+            if slot >= PATCH_COUNT {
+                return Err("slot fora da faixa".into());
+            }
+            self.raw[slot * PATCH_LEN..(slot + 1) * PATCH_LEN].copy_from_slice(bytes);
+            return Ok(());
+        }
+        if bytes.len() == super::preset::PRESET_LEN {
+            if !bytes[PATCH_LEN * PATCH_COUNT..].starts_with(b"PATCHEND") {
+                return Err("arquivo de tabela sem PATCHEND".into());
+            }
+            self.raw.copy_from_slice(bytes);
+            return Ok(());
+        }
+        Err(format!(
+            "tamanho inesperado: {} bytes (esperado {PATCH_LEN} ou {})",
+            bytes.len(),
+            super::preset::PRESET_LEN
+        ))
+    }
+
     pub fn to_preset(&self) -> super::preset::Preset {
         super::preset::Preset::from_raw(self.raw.clone()).expect("validated on construction")
     }
@@ -265,6 +311,27 @@ mod tests {
         assert_eq!(&t.raw()[off..off + 2], &95u16.to_le_bytes());
         assert!(t.swap_chain_positions(0, 2, 5));
         assert_eq!(t.patch(0).unwrap().chain(), [0, 1, 4, 2, 3, 5]);
+    }
+
+    #[test]
+    fn factory_asset_is_a_valid_table() {
+        let f = PresetTable::factory();
+        assert!(f.is_factory());
+        assert_eq!(f.raw().len(), crate::preset::PRESET_LEN);
+        assert!(f.patch(0).is_some());
+    }
+
+    #[test]
+    fn copy_import_and_export() {
+        let mut t = table();
+        t.set_param(0, 1, 0, 11);
+        assert!(t.copy_patch(0, 5));
+        assert_eq!(t.patch(5).unwrap().param(1, 0), Some(11));
+        let exported = t.patch(0).unwrap().raw().to_vec();
+        assert_eq!(exported.len(), PATCH_LEN);
+        assert!(t.import(9, &exported).is_ok());
+        assert_eq!(t.patch(9).unwrap().param(1, 0), Some(11));
+        assert!(t.import(9, &[1, 2, 3]).is_err());
     }
 
     #[test]
