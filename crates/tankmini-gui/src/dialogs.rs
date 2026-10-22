@@ -1518,9 +1518,10 @@ pub fn ir_dialog(app: &AppRef, path: &std::path::Path, wav: ir::Wav) {
 /// confirmation and a backup of that slot).
 pub fn import_amp(app: &AppRef) {
     let filter = gtk::FileFilter::new();
-    filter.set_name(Some("Modelo de amp (.am4data)"));
-    filter.add_suffix("am4data");
-    filter.add_suffix("am4Data");
+    filter.set_name(Some("Modelo de amp (.am2data, .am3data, .am4data)"));
+    for ext in ["am2data", "am2Data", "am3data", "am3Data", "am4data", "am4Data"] {
+        filter.add_suffix(ext);
+    }
     let filters = gio::ListStore::new::<gtk::FileFilter>();
     filters.append(&filter);
     let picker = gtk::FileDialog::builder().title("Escolher um modelo de amp").filters(&filters).build();
@@ -1528,7 +1529,8 @@ pub fn import_amp(app: &AppRef) {
     picker.open(Some(&app.window.clone()), gio::Cancellable::NONE, move |res| {
         let Ok(file) = res else { return };
         let Some(path) = file.path() else { return };
-        match std::fs::read(&path).map_err(|e| e.to_string()).and_then(|b| amp::Model::parse(&b)) {
+        let file_name = path.file_name().and_then(|n| n.to_str()).map(str::to_string);
+        match std::fs::read(&path).map_err(|e| e.to_string()).and_then(|b| amp::Model::parse_named(&b, file_name.as_deref())) {
             Ok(model) => amp_dialog(&app, &path, model),
             Err(e) => app.toast(&format!("Modelo recusado: {e}")),
         }
@@ -1543,9 +1545,14 @@ pub fn amp_dialog(app: &AppRef, path: &std::path::Path, model: amp::Model) {
     let page = adw::PreferencesPage::new();
     let group = adw::PreferencesGroup::new();
     group.set_title(&path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
-    group.set_description(Some(
-        "Modelo AM4 (captura de amp por rede neural). Teste antes com \"Ouvir\": modelos AM4 ainda não foram confirmados em todas as versões da pedaleira.",
-    ));
+    group.set_description(Some(&match model.format {
+        amp::Format::Am2 => "Modelo AM2, o mesmo formato dos amps de fábrica desta pedaleira.".to_string(),
+        f => format!(
+            "Modelo {} (captura de amp por rede neural). Teste antes com \"Ouvir\": esta pedaleira guarda os amps dela em AM2, e {} ainda não foi confirmado nela.",
+            f.label(),
+            f.label()
+        ),
+    }));
     page.add(&group);
 
     let name = adw::EntryRow::new();
@@ -1681,7 +1688,7 @@ pub fn community(app: &AppRef) {
     page.set_margin_end(18);
 
     let intro = label(
-        "Amps e IRs compartilhados por outros usuários. Esta pedaleira importa amps AM4 e IRs em WAV; os outros tipos aparecem só para consulta.",
+        "Amps e IRs compartilhados por outros usuários. Esta pedaleira importa amps (AM2, AM3, AM4) e IRs em WAV; AM2 é o formato dos amps dela.",
         &["tm-small", "tm-dim"],
     );
     intro.set_wrap(true);
@@ -1758,7 +1765,8 @@ pub fn community(app: &AppRef) {
                 match rx.recv().await {
                     Ok(Ok((path, bytes))) => {
                         let opened = match kind {
-                            Kind::Amp => amp::Model::parse(&bytes).map(|m| amp_dialog(&app, &path, m)),
+                            Kind::Amp => amp::Model::parse_named(&bytes, path.file_name().and_then(|n| n.to_str()))
+                                .map(|m| amp_dialog(&app, &path, m)),
                             Kind::Ir => ir::parse_wav(&bytes).map(|w| ir_dialog(&app, &path, w)),
                             Kind::Other => Err("tipo não suportado".into()),
                         };
@@ -1800,7 +1808,11 @@ pub fn community(app: &AppRef) {
                     let fr = adw::ActionRow::new();
                     fr.set_title(&glib::markup_escape_text(&file.display));
                     fr.set_subtitle(match file.kind {
-                        Kind::Amp => "amp (AM4)",
+                        Kind::Amp => match amp::Format::from_file_name(&file.display) {
+                            Some(amp::Format::Am2) => "amp (AM2, formato desta pedaleira)",
+                            Some(amp::Format::Am3) => "amp (AM3)",
+                            _ => "amp (AM4)",
+                        },
                         Kind::Ir => "IR de caixa (WAV)",
                         Kind::Other => "não suportado por esta pedaleira",
                     });

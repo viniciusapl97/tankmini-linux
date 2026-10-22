@@ -111,7 +111,7 @@ enum Command {
         #[command(subcommand)]
         op: CabOp,
     },
-    /// Amp models (.am4data): audition in RAM, or store in an AMP slot
+    /// Amp models (.am2data/.am3data/.am4data): audition in RAM, or store in an AMP slot
     Amp {
         #[command(subcommand)]
         op: AmpOp,
@@ -185,7 +185,7 @@ enum CabOp {
 
 #[derive(Subcommand)]
 enum AmpOp {
-    /// Send an .am4data to the pedal's audition buffer (RAM only)
+    /// Send a model to the pedal's audition buffer (RAM only)
     Audition {
         file: PathBuf,
         /// Name shown on the pedal (14 characters); the model's own by default
@@ -195,7 +195,7 @@ enum AmpOp {
         #[arg(long)]
         out: Option<PathBuf>,
     },
-    /// Store an .am4data in an AMP slot (writes flash)
+    /// Store a model in an AMP slot (writes flash)
     Save {
         /// Slot 0-19 (replaces the amp stored there)
         slot: u8,
@@ -807,7 +807,10 @@ fn run(cli: Cli) -> Result<(), String> {
             let (mut pedal, _) = open_device(cli.dev.clone())?;
             match op {
                 AmpOp::Audition { file, name, out } => {
-                    let model = amp::Model::parse(&std::fs::read(&file).map_err(|e| e.to_string())?)?;
+                    let model = amp::Model::parse_named(
+                        &std::fs::read(&file).map_err(|e| e.to_string())?,
+                        file.file_name().and_then(|n| n.to_str()),
+                    )?;
                     let record = model.record(name.as_deref())?;
                     if let Some(out) = out {
                         std::fs::write(&out, &record).map_err(|e| e.to_string())?;
@@ -826,7 +829,10 @@ fn run(cli: Cli) -> Result<(), String> {
                     if slot as usize >= amp::SLOT_COUNT {
                         return Err("slot deve ser 0-19".into());
                     }
-                    let model = amp::Model::parse(&std::fs::read(&file).map_err(|e| e.to_string())?)?;
+                    let model = amp::Model::parse_named(
+                        &std::fs::read(&file).map_err(|e| e.to_string())?,
+                        file.file_name().and_then(|n| n.to_str()),
+                    )?;
                     let record = model.record(name.as_deref())?;
                     let names = pedal.amp_names().unwrap_or_default();
                     let old = names.get(slot as usize).cloned().unwrap_or_default();

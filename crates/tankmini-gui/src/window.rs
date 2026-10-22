@@ -86,7 +86,7 @@ pub fn build(app: &AppRef) {
     s1.append(Some("Copiar para outro slot…"), Some("win.copy-slot"));
     s1.append(Some("Trocar de lugar com…"), Some("win.swap-slots"));
     s1.append(Some("Importar IR (cab)…"), Some("win.import-ir"));
-    s1.append(Some("Importar amp (.am4data)…"), Some("win.import-amp"));
+    s1.append(Some("Importar amp…"), Some("win.import-amp"));
     s1.append(Some("Comunidade M-VAVE…"), Some("win.community"));
     s1.append(Some("Renomear…"), Some("win.rename"));
     menu.append_section(None, &s1);

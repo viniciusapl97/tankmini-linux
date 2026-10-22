@@ -34,11 +34,11 @@ impl Sort {
 /// What a file is good for on this pedal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
-    /// `.am4data`: importable as an amp.
+    /// `.am2data`, `.am3data`, `.am4data`: importable as an amp.
     Amp,
     /// `.wav`: importable as a cab IR.
     Ir,
-    /// Anything else (`.am3data`, `.nam`, …): shown, not importable.
+    /// Anything else (`.nam`, …): shown, not importable.
     Other,
 }
 
@@ -103,7 +103,7 @@ struct RawFile {
 
 fn kind_of(name: &str) -> Kind {
     let lower = name.to_ascii_lowercase();
-    if lower.ends_with(".am4data") {
+    if crate::amp::Format::from_file_name(&lower).is_some() {
         Kind::Amp
     } else if lower.ends_with(".wav") {
         Kind::Ir
@@ -217,7 +217,7 @@ mod tests {
         let p = parse_post(raw);
         assert_eq!(p.title, "SLAMMIN");
         assert_eq!(p.files[0].display, "SLAMMIN_JHS.am3data");
-        assert_eq!(p.files[0].kind, Kind::Other);
+        assert_eq!(p.files[0].kind, Kind::Amp);
         assert_eq!(p.files[1].display, "Fender_Tweed.am4data");
         assert_eq!(p.files[1].kind, Kind::Amp);
         assert_eq!(p.files[2].display, "Clean IR.wav");

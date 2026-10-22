@@ -17,7 +17,8 @@ Source: a walk through M-EFCS 3.9.2314 on a phone connected to the pedal
   type 5 buffer, saves to a slot after a confirmation and a backup of that slot
   in `~/.local/share/tankmini/cab-backups/`.
 
-- **AMP model import** (`.am4data`, menu "Importar amp (.am4data)…"; CLI
+- **AMP model import** (`.am2data`, `.am3data`, `.am4data`; AM2 is the
+  pedal's own format, menu "Importar amp (.am4data)…"; CLI
   `tankmini amp audition` / `amp save --yes`): the LMT block is computed by
   our port of the app's GRU (bit exact); audition through the type 5 buffer
   (verified on the device: identical to the app's upload); save to an AMP slot
@@ -54,9 +55,6 @@ needs 6 GB RAM), Community (vendor forum behind a login).
 
 ## Not done
 
-- AMP models: AM2/AM3 files are not supported (only AM4). The community has
-  many `.am2data`, which is the format this pedal's own slots hold — the next
-  thing to support (the app computes their LMT with `calc_bias_gru`, weights
-  at +0x43c).
+- (none of the model formats left: AM2, AM3 and AM4 all import.)
 - NAM import: the official app converts on the vendor's server; not
   reproducible offline.

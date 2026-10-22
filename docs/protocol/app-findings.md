@@ -522,3 +522,17 @@ back over USB in 512-byte blocks.
   `{"search","select":[],"sort":1,"currentPage","pageSize"}`; download with
   `GET /bbs/api/download?articleId=<id>&file=<title>`. On 2026-10-22 it served
   9 AM4, 1 AM3 and 2 WAV IR posts.
+
+### 13.1 AM2 / AM3 (2026-10-22, on the device)
+
+- The pedal's own amp slots and the factory `am3` blob hold **AM2** records:
+  `0x183c` (6204) bytes, **no** LMT stored.
+- Auditioning a community `.am2data` from the app put in the buffer: the file
+  with its first bytes rewritten to `AM2\0` (that file's header was broken:
+  `00 00 32 00`), then an LMT block at `0x183c` (**verified**).
+- That LMT is `calc_bias_gru` (weights at +0x43c, init flag 0): the same GRU
+  step **without biases** (the flag-0 init leaves b_ih/b_hh at zero; the
+  model has W_ih, W_hh, then the output layer). AM3 files (also 6204 bytes)
+  go the same way. `core::amp` matches the library on a community AM2 and
+  AM3 file and our CLI upload of the broken AM2 is byte-identical to the
+  app's.

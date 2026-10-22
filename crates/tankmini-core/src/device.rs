@@ -237,7 +237,8 @@ impl Pedal {
     /// Store an AMP record in slot `slot` (**writes flash**): upload, then
     /// `WRITE 0xF0000000 + slot [0]`, verified by reading the slot back.
     pub fn amp_save(&mut self, slot: u8, record: &[u8]) -> std::io::Result<bool> {
-        if slot as usize >= crate::amp::SLOT_COUNT || record.len() != crate::amp::RECORD_LEN {
+        let sizes = [crate::amp::AM4_LEN, crate::amp::AM2_LEN].map(|n| n + crate::amp::LMT_LEN);
+        if slot as usize >= crate::amp::SLOT_COUNT || !sizes.contains(&record.len()) {
             return Ok(false);
         }
         if !self.amp_upload(record)? {

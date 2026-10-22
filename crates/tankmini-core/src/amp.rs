@@ -1,4 +1,5 @@
-//! AMP model files (`.am4data`): the record the pedal stores in an AMP slot.
+//! AMP model files (`.am2data`, `.am3data`, `.am4data`): the record the pedal
+//! stores in an AMP slot.
 //!
 //! What the official app sends (**verified**, firmware `TANK MINI_004`, type 5
 //! buffer read back after an audition, see `docs/protocol/app-findings.md` §13):
@@ -11,16 +12,80 @@
 //! run under an emulator, byte for byte on every AM4 model of the community
 //! site (2026-10-22); `tools/lmt_reference.py` is the reference.
 //!
-//! Model layout (PyTorch `GRU(1, 16)` + `Linear(16, 1)`), 929 floats at
-//! `WEIGHTS`: W_ih[48], W_hh[48×16], b_ih[48], b_hh[48], then the output layer
-//! (not needed here). Gates in PyTorch order r, z, n.
+//! Model layout (PyTorch `GRU(1, 16)` + `Linear(16, 1)`), floats from
+//! [`Format::weights`]: W_ih[48], W_hh[48×16], then for AM4 b_ih[48] and
+//! b_hh[48] (AM2/AM3 have no GRU biases: `calc_bias_gru`, weights at +0x43c),
+//! then the output layer (not needed here). Gates in PyTorch order r, z, n.
+//!
+//! AM2 is what this pedal's own slots hold (the factory `am3` blob). The app
+//! also rewrites the first four bytes to the magic of the file's extension:
+//! some community `.am2data` files carry a broken header (**verified** by
+//! auditioning one from the app and reading the buffer back).
 
 pub const MAGIC_AM4: &[u8; 4] = b"AM4\0";
 /// Bytes of an AM4 model before its LMT block.
 pub const AM4_LEN: usize = 0x1ebc;
+/// Bytes of an AM2 or AM3 model before its LMT block.
+pub const AM2_LEN: usize = 0x183c;
 pub const LMT_LEN: usize = 68;
 pub const RECORD_LEN: usize = AM4_LEN + LMT_LEN;
-const WEIGHTS: usize = 0x83c;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Format {
+    /// The pedal's own format (its factory amps).
+    Am2,
+    Am3,
+    Am4,
+}
+
+impl Format {
+    pub fn magic(self) -> &'static [u8; 4] {
+        match self {
+            Format::Am2 => b"AM2\0",
+            Format::Am3 => b"AM3\0",
+            Format::Am4 => MAGIC_AM4,
+        }
+    }
+
+    /// Model bytes before the LMT block.
+    pub fn len(self) -> usize {
+        match self {
+            Format::Am4 => AM4_LEN,
+            _ => AM2_LEN,
+        }
+    }
+
+    fn weights(self) -> usize {
+        match self {
+            Format::Am4 => 0x83c,
+            _ => 0x43c,
+        }
+    }
+
+    fn has_bias(self) -> bool {
+        self == Format::Am4
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Format::Am2 => "AM2",
+            Format::Am3 => "AM3",
+            Format::Am4 => "AM4",
+        }
+    }
+
+    /// From a file name: `x.am2data`, `x.am3Data`, `x.am4data`.
+    pub fn from_file_name(name: &str) -> Option<Self> {
+        let lower = name.to_ascii_lowercase();
+        [Format::Am2, Format::Am3, Format::Am4]
+            .into_iter()
+            .find(|f| lower.ends_with(&format!(".am{}data", &f.label()[2..])))
+    }
+
+    fn from_magic(bytes: &[u8]) -> Option<Self> {
+        [Format::Am2, Format::Am3, Format::Am4].into_iter().find(|f| bytes.starts_with(f.magic()))
+    }
+}
 const HIDDEN: usize = 16;
 /// Name stored after the magic (14 bytes, NUL padded), like the CAB records.
 pub const NAME_LEN: usize = 14;
@@ -95,15 +160,17 @@ struct Gru {
 }
 
 impl Gru {
-    fn from_floats(f: &[f32]) -> Self {
+    fn from_floats(f: &[f32], bias: bool) -> Self {
         let mut g = Gru { w_ih: [0; 48], w_hh: [[0; HIDDEN]; 48], b_ih: [0; 48], b_hh: [0; 48], h: [0; HIDDEN] };
         for r in 0..48 {
             g.w_ih[r] = q21(f[r]);
             for c in 0..HIDDEN {
                 g.w_hh[r][c] = q21(f[48 + r * HIDDEN + c]);
             }
-            g.b_ih[r] = q21(f[816 + r]);
-            g.b_hh[r] = q21(f[864 + r]);
+            if bias {
+                g.b_ih[r] = q21(f[816 + r]);
+                g.b_hh[r] = q21(f[864 + r]);
+            }
         }
         g
     }
@@ -125,12 +192,14 @@ impl Gru {
     }
 }
 
-/// The 68-byte LMT block for an AM4 model.
-pub fn lmt_block(model: &[u8]) -> Result<[u8; LMT_LEN], String> {
-    if model.len() < WEIGHTS + 929 * 4 {
+/// The 68-byte LMT block for a model of `format`.
+pub fn lmt_block(format: Format, model: &[u8]) -> Result<[u8; LMT_LEN], String> {
+    let start = format.weights();
+    let count = if format.has_bias() { 912 } else { 816 };
+    if model.len() < start + count * 4 {
         return Err("arquivo de amp curto demais".into());
     }
-    let f: Vec<f32> = model[WEIGHTS..WEIGHTS + 929 * 4]
+    let f: Vec<f32> = model[start..start + count * 4]
         .chunks_exact(4)
         .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
         .collect();
@@ -138,7 +207,7 @@ pub fn lmt_block(model: &[u8]) -> Result<[u8; LMT_LEN], String> {
         return Err("o modelo tem valores inválidos".into());
     }
     let tables = Tables::new();
-    let mut gru = Gru::from_floats(&f);
+    let mut gru = Gru::from_floats(&f, format.has_bias());
     // One second of a decay from 1 to about 0.001, as `calc_bias_gru_am4`
     // feeds it: expf(i * -6.908 * (1/22050)), each step rounded to f32.
     let c1 = f32::from_bits(0xc0dd_0c55);
@@ -157,37 +226,45 @@ pub fn lmt_block(model: &[u8]) -> Result<[u8; LMT_LEN], String> {
     Ok(out)
 }
 
-/// A parsed `.am4data` file.
+/// A parsed model file.
 #[derive(Debug, Clone)]
 pub struct Model {
     pub name: String,
+    pub format: Format,
     bytes: Vec<u8>,
 }
 
 impl Model {
+    /// Parse by content alone (the magic must be valid).
     pub fn parse(bytes: &[u8]) -> Result<Self, String> {
-        if bytes.len() < 4 {
-            return Err("arquivo vazio".into());
+        Self::parse_named(bytes, None)
+    }
+
+    /// Parse with the file name as a hint: like the app, the extension wins
+    /// over a broken magic.
+    pub fn parse_named(bytes: &[u8], file_name: Option<&str>) -> Result<Self, String> {
+        if bytes.len() < 4 + NAME_LEN {
+            return Err("arquivo vazio ou curto demais".into());
         }
-        match &bytes[..4] {
-            m if m == MAGIC_AM4 => {}
-            b"AM2\0" | b"AM3\0" => {
-                return Err(format!(
-                    "modelo {} ainda não suportado; só AM4 por enquanto",
-                    String::from_utf8_lossy(&bytes[..3])
-                ))
-            }
-            _ => return Err("não é um modelo de amp (.am4data)".into()),
-        }
+        let format = file_name
+            .and_then(Format::from_file_name)
+            .or_else(|| Format::from_magic(bytes))
+            .ok_or("não é um modelo de amp (.am2data, .am3data ou .am4data)")?;
+        let len = format.len();
         // A file that already carries its LMT (e.g. read back from a slot).
-        let has_lmt = bytes.len() >= RECORD_LEN && &bytes[AM4_LEN..AM4_LEN + 4] == b"LMT\0";
-        if bytes.len() != AM4_LEN && !has_lmt {
-            return Err(format!("tamanho inesperado: {} bytes (esperado {AM4_LEN})", bytes.len()));
+        let has_lmt = bytes.len() >= len + LMT_LEN && &bytes[len..len + 4] == b"LMT\0";
+        if bytes.len() != len && !has_lmt {
+            return Err(format!(
+                "tamanho inesperado para {}: {} bytes (esperado {len})",
+                format.label(),
+                bytes.len()
+            ));
         }
-        let len = AM4_LEN;
-        let end = bytes[4..4 + NAME_LEN].iter().position(|b| *b == 0).unwrap_or(NAME_LEN);
-        let name = String::from_utf8_lossy(&bytes[4..4 + end]).trim().to_string();
-        Ok(Self { name, bytes: bytes[..len].to_vec() })
+        let mut model = bytes[..len].to_vec();
+        model[..4].copy_from_slice(format.magic());
+        let end = model[4..4 + NAME_LEN].iter().position(|b| *b == 0).unwrap_or(NAME_LEN);
+        let name = String::from_utf8_lossy(&model[4..4 + end]).trim().to_string();
+        Ok(Self { name, format, bytes: model })
     }
 
     /// The record the pedal receives: the model with `name` (if given) and its LMT.
@@ -200,7 +277,7 @@ impl Model {
                 field[i] = c as u8;
             }
         }
-        r.extend_from_slice(&lmt_block(&r)?);
+        r.extend_from_slice(&lmt_block(self.format, &r)?);
         Ok(r)
     }
 }
@@ -220,7 +297,7 @@ mod tests {
         for i in 0..929 {
             seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
             let v = ((seed >> 8) as f32 / 16_777_216.0 - 0.5) * 0.6;
-            m[WEIGHTS + 4 * i..WEIGHTS + 4 * i + 4].copy_from_slice(&v.to_le_bytes());
+            m[0x83c + 4 * i..0x83c + 4 * i + 4].copy_from_slice(&v.to_le_bytes());
         }
         m
     }
@@ -240,7 +317,7 @@ mod tests {
 
     #[test]
     fn lmt_matches_the_app_library() {
-        let lmt = lmt_block(&synthetic()).unwrap();
+        let lmt = lmt_block(Format::Am4, &synthetic()).unwrap();
         let hex: String = lmt.iter().map(|b| format!("{b:02x}")).collect();
         assert_eq!(hex, EXPECTED_SYNTHETIC_LMT);
     }
@@ -259,11 +336,48 @@ mod tests {
 
     #[test]
     fn rejects_other_files() {
-        assert!(Model::parse(b"RIFF....").is_err());
-        let mut am2 = synthetic();
-        am2[..4].copy_from_slice(b"AM2\0");
-        assert!(Model::parse(&am2).is_err());
+        assert!(Model::parse(b"RIFF..............").is_err());
+        // AM2 is shorter than AM4.
+        let mut wrong = synthetic();
+        wrong[..4].copy_from_slice(b"AM2\0");
+        assert!(Model::parse(&wrong).is_err());
     }
+
+    /// AM2: no GRU biases, weights at +0x43c, 6204 bytes. Expected value from
+    /// the app's `calc_bias_gru` under the emulator.
+    fn synthetic_am2() -> Vec<u8> {
+        let mut m = vec![0u8; AM2_LEN];
+        // A broken header, as some community files have: the extension decides.
+        m[2] = b'2';
+        let mut seed = 0x0bad_cafeu32;
+        for i in 0..900 {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let v = ((seed >> 8) as f32 / 16_777_216.0 - 0.5) * 0.6;
+            m[0x43c + 4 * i..0x43c + 4 * i + 4].copy_from_slice(&v.to_le_bytes());
+        }
+        m
+    }
+
+    #[test]
+    fn am2_record_fixes_the_magic_and_matches_the_app() {
+        let model = Model::parse_named(&synthetic_am2(), Some("Boss IR-2.am2Data")).unwrap();
+        assert_eq!(model.format, Format::Am2);
+        let r = model.record(None).unwrap();
+        assert_eq!(r.len(), AM2_LEN + LMT_LEN);
+        assert_eq!(&r[..4], b"AM2\0");
+        let hex: String = r[AM2_LEN..].iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(hex, EXPECTED_SYNTHETIC_AM2_LMT);
+    }
+
+    #[test]
+    fn format_from_file_name() {
+        assert_eq!(Format::from_file_name("a.am2data"), Some(Format::Am2));
+        assert_eq!(Format::from_file_name("b.AM3Data"), Some(Format::Am3));
+        assert_eq!(Format::from_file_name("c.am4data"), Some(Format::Am4));
+        assert_eq!(Format::from_file_name("d.wav"), None);
+    }
+
+    const EXPECTED_SYNTHETIC_AM2_LMT: &str = "4c4d5400000080b5000000b500000000000000b5000000b5000080b5000000b5000000b5000000b50000c0b500000000000000b5000000b5000080b5000080b500000000";
 
     const EXPECTED_SYNTHETIC_LMT: &str = "4c4d540080e6b93d802c7cbd806abe3d00066d3d80b1ccbd8084f83d8029cf3d60ab303ec0bf263e80aef7bdd007a6be006629bc00c4ed3c1082bc3e40cd0ebe20b0793e";
 }
