@@ -180,13 +180,11 @@ impl Model {
             _ => return Err("não é um modelo de amp (.am4data)".into()),
         }
         // A file that already carries its LMT (e.g. read back from a slot).
-        let len = if bytes.len() >= RECORD_LEN && &bytes[AM4_LEN..AM4_LEN + 4] == b"LMT\0" {
-            AM4_LEN
-        } else if bytes.len() == AM4_LEN {
-            AM4_LEN
-        } else {
+        let has_lmt = bytes.len() >= RECORD_LEN && &bytes[AM4_LEN..AM4_LEN + 4] == b"LMT\0";
+        if bytes.len() != AM4_LEN && !has_lmt {
             return Err(format!("tamanho inesperado: {} bytes (esperado {AM4_LEN})", bytes.len()));
-        };
+        }
+        let len = AM4_LEN;
         let end = bytes[4..4 + NAME_LEN].iter().position(|b| *b == 0).unwrap_or(NAME_LEN);
         let name = String::from_utf8_lossy(&bytes[4..4 + end]).trim().to_string();
         Ok(Self { name, bytes: bytes[..len].to_vec() })

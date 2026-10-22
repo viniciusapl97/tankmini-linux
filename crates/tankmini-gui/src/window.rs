@@ -87,6 +87,7 @@ pub fn build(app: &AppRef) {
     s1.append(Some("Trocar de lugar com…"), Some("win.swap-slots"));
     s1.append(Some("Importar IR (cab)…"), Some("win.import-ir"));
     s1.append(Some("Importar amp (.am4data)…"), Some("win.import-amp"));
+    s1.append(Some("Comunidade M-VAVE…"), Some("win.community"));
     s1.append(Some("Renomear…"), Some("win.rename"));
     menu.append_section(None, &s1);
     let s2 = gio::Menu::new();
@@ -603,6 +604,7 @@ fn install_actions(app: &AppRef) {
     add("swap-slots", Box::new(crate::dialogs::swap_slots));
     add("import-ir", Box::new(crate::dialogs::import_ir));
     add("import-amp", Box::new(crate::dialogs::import_amp));
+    add("community", Box::new(crate::dialogs::community));
     add("rename", Box::new(crate::dialogs::rename));
     add("backups", Box::new(crate::dialogs::backups));
     add("factory", Box::new(crate::dialogs::factory));

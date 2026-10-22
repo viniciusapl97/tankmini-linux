@@ -23,6 +23,12 @@ Source: a walk through M-EFCS 3.9.2314 on a phone connected to the pedal
   (verified on the device: identical to the app's upload); save to an AMP slot
   after a confirmation and a backup in `~/.local/share/tankmini/amp-backups/`.
 
+- **Community browser** (menu "Comunidade M-VAVE…"): search the vendor's
+  public site, sorted by downloads or date, only importable posts by default;
+  "Abrir" downloads the file to `~/.local/share/tankmini/community/<post>/`
+  and opens the amp or IR import dialog. `core::community` behind the
+  `community` feature (ureq), so the CLI stays offline.
+
 ## Waiting on the owner
 
 - Ear test of the audition, IR and AMP (does the pedal play the buffer at
@@ -48,6 +54,9 @@ needs 6 GB RAM), Community (vendor forum behind a login).
 
 ## Not done
 
-- AMP models: AM2/AM3 files are not supported (only AM4).
+- AMP models: AM2/AM3 files are not supported (only AM4). The community has
+  many `.am2data`, which is the format this pedal's own slots hold — the next
+  thing to support (the app computes their LMT with `calc_bias_gru`, weights
+  at +0x43c).
 - NAM import: the official app converts on the vendor's server; not
   reproducible offline.

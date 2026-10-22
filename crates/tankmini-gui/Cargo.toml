@@ -10,7 +10,7 @@ name = "tankmini-gui"
 path = "src/main.rs"
 
 [dependencies]
-tankmini-core = { path = "../tankmini-core" }
+tankmini-core = { path = "../tankmini-core", features = ["community"] }
 gtk = { package = "gtk4", version = "0.10", features = ["v4_14"] }
 adw = { version = "0.8", package = "libadwaita", features = ["v1_5"] }
 async-channel = "2"

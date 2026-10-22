@@ -7,6 +7,8 @@
 pub mod amp;
 pub mod backup;
 pub mod catalog;
+#[cfg(feature = "community")]
+pub mod community;
 pub mod device;
 pub mod discovery;
 pub mod frame;

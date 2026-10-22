@@ -1383,7 +1383,7 @@ pub fn import_ir(app: &AppRef) {
     });
 }
 
-fn ir_dialog(app: &AppRef, path: &std::path::Path, wav: ir::Wav) {
+pub fn ir_dialog(app: &AppRef, path: &std::path::Path, wav: ir::Wav) {
     let dialog = adw::Dialog::new();
     dialog.set_title("Importar IR");
     dialog.set_content_width(480);
@@ -1435,7 +1435,7 @@ fn ir_dialog(app: &AppRef, path: &std::path::Path, wav: ir::Wav) {
     listen.set_tooltip_text(Some("Toca o IR na pedaleira sem gravar nada"));
     let save = gtk::Button::with_label("Gravar no cab…");
     save.add_css_class("tm-pill");
-    save.add_css_class("suggested-action");
+    save.add_css_class("tm-cta");
     buttons.append(&listen);
     buttons.append(&save);
     let actions = adw::PreferencesGroup::new();
@@ -1535,7 +1535,7 @@ pub fn import_amp(app: &AppRef) {
     });
 }
 
-fn amp_dialog(app: &AppRef, path: &std::path::Path, model: amp::Model) {
+pub fn amp_dialog(app: &AppRef, path: &std::path::Path, model: amp::Model) {
     let dialog = adw::Dialog::new();
     dialog.set_title("Importar amp");
     dialog.set_content_width(480);
@@ -1550,7 +1550,11 @@ fn amp_dialog(app: &AppRef, path: &std::path::Path, model: amp::Model) {
 
     let name = adw::EntryRow::new();
     name.set_title("Nome na pedaleira (até 14 letras)");
-    name.set_text(&model.name);
+    // Community models often carry a number as their internal name; the file
+    // name says more.
+    let from_file = ir::name_from_path(path);
+    let looks_numeric = model.name.chars().all(|c| c.is_ascii_digit());
+    name.set_text(if looks_numeric || model.name.is_empty() { &from_file } else { &model.name });
     group.add(&name);
 
     let slots = adw::ComboRow::new();
@@ -1574,7 +1578,7 @@ fn amp_dialog(app: &AppRef, path: &std::path::Path, model: amp::Model) {
     listen.set_tooltip_text(Some("Toca o amp na pedaleira sem gravar nada"));
     let save = gtk::Button::with_label("Gravar no amp…");
     save.add_css_class("tm-pill");
-    save.add_css_class("suggested-action");
+    save.add_css_class("tm-cta");
     buttons.append(&listen);
     buttons.append(&save);
     let actions = adw::PreferencesGroup::new();
@@ -1657,5 +1661,244 @@ fn amp_dialog(app: &AppRef, path: &std::path::Path, model: amp::Model) {
             confirm.present(Some(&dialog_c));
         });
     }
+    dialog.present(Some(&app.window.clone()));
+}
+
+/// Browse the M-VAVE community: search shared amp models and IRs, download
+/// one and open it in the import dialog. Network calls run on a thread.
+pub fn community(app: &AppRef) {
+    use tankmini_core::community::{self, Kind, Post, Sort};
+
+    let dialog = adw::Dialog::new();
+    dialog.set_title("Comunidade M-VAVE");
+    dialog.set_content_width(640);
+    dialog.set_content_height(720);
+
+    let page = vbox(12);
+    page.set_margin_top(12);
+    page.set_margin_bottom(18);
+    page.set_margin_start(18);
+    page.set_margin_end(18);
+
+    let intro = label(
+        "Amps e IRs compartilhados por outros usuários. Esta pedaleira importa amps AM4 e IRs em WAV; os outros tipos aparecem só para consulta.",
+        &["tm-small", "tm-dim"],
+    );
+    intro.set_wrap(true);
+    page.append(&intro);
+
+    let bar = hbox(8);
+    let search = gtk::SearchEntry::new();
+    search.set_placeholder_text(Some("Buscar (ex.: Marshall, Fender, V30)"));
+    search.set_hexpand(true);
+    bar.append(&search);
+    let sort = gtk::DropDown::from_strings(&["Mais baixados", "Mais recentes"]);
+    bar.append(&sort);
+    page.append(&bar);
+
+    let only = gtk::CheckButton::with_label("Só o que dá para importar");
+    only.set_active(true);
+    page.append(&only);
+
+    let list = gtk::ListBox::new();
+    list.set_selection_mode(gtk::SelectionMode::None);
+    list.add_css_class("boxed-list");
+    let status = label("", &["tm-small", "tm-faint"]);
+    status.set_xalign(0.5);
+    let more = gtk::Button::with_label("Carregar mais");
+    more.add_css_class("tm-pill");
+    more.set_halign(gtk::Align::Center);
+    more.set_visible(false);
+    let content = vbox(12);
+    content.append(&list);
+    content.append(&status);
+    content.append(&more);
+    let scroll = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vexpand(true)
+        .child(&content)
+        .build();
+    page.append(&scroll);
+
+    let tv = adw::ToolbarView::new();
+    tv.add_top_bar(&adw::HeaderBar::new());
+    tv.set_content(Some(&page));
+    dialog.set_child(Some(&tv));
+
+    // Page state: (query, sort, page loaded so far, generation to drop stale replies).
+    let state = Rc::new(std::cell::RefCell::new((String::new(), Sort::Popular, 0u32, 0u64)));
+
+    let open_file = {
+        let app = app.clone();
+        let dialog = dialog.clone();
+        move |post: &Post, file: &community::File, button: &gtk::Button| {
+            button.set_sensitive(false);
+            button.set_label("Baixando…");
+            let (tx, rx) = async_channel::bounded(1);
+            let (post_id, file_c) = (post.id, file.clone());
+            std::thread::spawn(move || {
+                let r = community::download(post_id, &file_c).and_then(|bytes| {
+                    let dir = community::download_dir().join(post_id.to_string());
+                    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+                    let safe: String =
+                        file_c.display.chars().map(|c| if c == '/' || c == '\\' { '_' } else { c }).collect();
+                    let path = dir.join(safe);
+                    std::fs::write(&path, &bytes).map_err(|e| e.to_string())?;
+                    Ok((path, bytes))
+                });
+                let _ = tx.send_blocking(r);
+            });
+            let app = app.clone();
+            let button = button.clone();
+            let kind = file.kind;
+            let parent = dialog.clone();
+            glib::spawn_future_local(async move {
+                button.set_sensitive(true);
+                button.set_label("Abrir");
+                match rx.recv().await {
+                    Ok(Ok((path, bytes))) => {
+                        let opened = match kind {
+                            Kind::Amp => amp::Model::parse(&bytes).map(|m| amp_dialog(&app, &path, m)),
+                            Kind::Ir => ir::parse_wav(&bytes).map(|w| ir_dialog(&app, &path, w)),
+                            Kind::Other => Err("tipo não suportado".into()),
+                        };
+                        match opened {
+                            Ok(()) => {
+                                parent.close();
+                            }
+                            Err(e) => app.toast(&format!("Arquivo recusado: {e}")),
+                        }
+                    }
+                    Ok(Err(e)) => app.toast(&e),
+                    Err(_) => {}
+                }
+            });
+        }
+    };
+    let open_file = Rc::new(open_file);
+
+    let fill = {
+        let list = list.clone();
+        let only = only.clone();
+        let open_file = open_file.clone();
+        move |posts: Vec<Post>| {
+            for post in posts {
+                if only.is_active() && !post.importable() {
+                    continue;
+                }
+                let row = adw::ExpanderRow::new();
+                row.set_title(&glib::markup_escape_text(&post.title));
+                let usable = post.files.iter().filter(|f| f.kind != Kind::Other).count();
+                row.set_subtitle(&glib::markup_escape_text(&format!(
+                    "{} · {} downloads · {} de {} arquivo(s) importáveis",
+                    post.author,
+                    post.downloads,
+                    usable,
+                    post.files.len()
+                )));
+                for file in &post.files {
+                    let fr = adw::ActionRow::new();
+                    fr.set_title(&glib::markup_escape_text(&file.display));
+                    fr.set_subtitle(match file.kind {
+                        Kind::Amp => "amp (AM4)",
+                        Kind::Ir => "IR de caixa (WAV)",
+                        Kind::Other => "não suportado por esta pedaleira",
+                    });
+                    if file.kind != Kind::Other {
+                        let b = gtk::Button::with_label("Abrir");
+                        b.add_css_class("tm-pill");
+                        b.set_valign(gtk::Align::Center);
+                        let open_file = open_file.clone();
+                        let (post, file) = (post.clone(), file.clone());
+                        b.connect_clicked(move |b| open_file(&post, &file, b));
+                        fr.add_suffix(&b);
+                    } else {
+                        fr.set_sensitive(false);
+                    }
+                    row.add_row(&fr);
+                }
+                list.append(&row);
+            }
+        }
+    };
+    let fill = Rc::new(fill);
+
+    // Load page `page` of the current query; page 1 clears the list.
+    let load: Rc<dyn Fn(bool)> = {
+        let state = state.clone();
+        let list = list.clone();
+        let status = status.clone();
+        let more = more.clone();
+        let fill = fill.clone();
+        Rc::new(move |next: bool| {
+            let (query, sort, page, gen) = {
+                let mut s = state.borrow_mut();
+                s.2 = if next { s.2 + 1 } else { 1 };
+                s.3 += 1;
+                (s.0.clone(), s.1, s.2, s.3)
+            };
+            if !next {
+                while let Some(c) = list.first_child() {
+                    list.remove(&c);
+                }
+            }
+            status.set_text("Carregando…");
+            more.set_visible(false);
+            let (tx, rx) = async_channel::bounded(1);
+            std::thread::spawn(move || {
+                let _ = tx.send_blocking(community::search(&query, sort, page, 20));
+            });
+            let state = state.clone();
+            let status = status.clone();
+            let more = more.clone();
+            let fill = fill.clone();
+            let list = list.clone();
+            glib::spawn_future_local(async move {
+                let Ok(result) = rx.recv().await else { return };
+                if state.borrow().3 != gen {
+                    return; // a newer search replaced this one
+                }
+                match result {
+                    Ok((posts, total)) => {
+                        let got = posts.len();
+                        fill(posts);
+                        let shown = list.observe_children().n_items();
+                        status.set_text(&if shown == 0 {
+                            "Nada encontrado.".to_string()
+                        } else {
+                            format!("{total} publicações na comunidade")
+                        });
+                        more.set_visible(got > 0 && (page as u64) * 20 < total);
+                    }
+                    Err(e) => status.set_text(&format!("Sem conexão com a comunidade: {e}")),
+                }
+            });
+        })
+    };
+    {
+        let state = state.clone();
+        let load = load.clone();
+        search.connect_search_changed(move |e| {
+            state.borrow_mut().0 = e.text().to_string();
+            load(false);
+        });
+    }
+    {
+        let state = state.clone();
+        let load = load.clone();
+        sort.connect_selected_notify(move |d| {
+            state.borrow_mut().1 = if d.selected() == 0 { Sort::Popular } else { Sort::Latest };
+            load(false);
+        });
+    }
+    {
+        let load = load.clone();
+        only.connect_toggled(move |_| load(false));
+    }
+    {
+        let load = load.clone();
+        more.connect_clicked(move |_| load(true));
+    }
+    load(false);
     dialog.present(Some(&app.window.clone()));
 }
