@@ -389,8 +389,18 @@ menubutton.tm-icon > button:hover, menubutton.tm-icon > button:checked { backgro
 .tm-tune-good { color: #43d17a; }
 .tm-tune-flat { color: #f0b429; }
 .tm-tune-sharp { color: #f0b429; }
-.tm-tune-bar trough { min-height: 10px; border-radius: 99px; background: @tm_surface_hi; }
-.tm-tune-bar progress { border-radius: 99px; background: #43d17a; }
+.tm-tune-side { font-size: 48px; font-weight: 700; color: #f0b429; }
+.tm-tune-advice { font-size: 20px; font-weight: 700; }
+.tm-tune-string {
+  min-width: 52px;
+  padding: 8px 6px;
+  border-radius: 14px;
+  background: @tm_surface;
+  border: 1px solid @tm_hair;
+}
+.tm-tune-string.active { background: @tm_text; color: @tm_bg; border-color: @tm_text; }
+.tm-tune-string-note { font-size: 18px; font-weight: 800; }
+.tm-tune-string-num { font-size: 11px; opacity: 0.6; }
 
 /* Play: volume bar */
 .tm-volbar-name { font-weight: 700; font-size: 13px; min-width: 64px; }

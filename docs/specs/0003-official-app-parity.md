@@ -33,7 +33,7 @@ Source: a walk through M-EFCS 3.9.2314 on a phone connected to the pedal
 | Rare actions in one "More" menu (share/import, swap, factory restore, tuner) | Header menu | We have the menu; keep the main screen clean |
 | Swap dialog with two position pickers and an arrow between them | Dialogs | Ours picks one target from the current preset; fine for now |
 | Search + Edit over an imported IR/AMP list | IR import | Worth it once people keep several IRs; we currently import one at a time |
-| Tuner with a clear flat/sharp needle and ♭/♯ 50 scale | Tune | **Owner asked for this redesign later**: today it is hard to tell above/below |
+| Tuner with a clear flat/sharp needle and ♭/♯ 50 scale | Tune | **Done**: drawn ±50-cent meter with a needle and an in-tune zone, ♭/♯ beside the note lighting up on the side it is off, "Abaixo do tom · aperte a corda" / "Acima do tom · afrouxe a corda", the six open strings with the current one lit, smoothed needle. Waiting on the owner's opinion |
 
 Not worth porting: Audio separator (stem separation, unrelated to the pedal,
 needs 6 GB RAM), Community (vendor forum behind a login).

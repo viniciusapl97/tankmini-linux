@@ -5,6 +5,8 @@
 //! shared slot and the UI polls it on a timer.
 
 use std::io::Read;
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -126,12 +128,114 @@ pub fn start(shared: &Shared) {
     });
 }
 
+/// What the screen shows for one moment, from either source.
+#[derive(Clone, PartialEq)]
+struct Reading {
+    note: String,
+    /// Negative = below the note (flat), positive = above (sharp).
+    cents: f32,
+    hz: Option<f32>,
+    /// Index into [`pitch::STRINGS`] of the open string this is closest to.
+    string: Option<usize>,
+}
+
+/// Within this many cents the string counts as in tune (the official app
+/// uses about the same window).
+const IN_TUNE: f32 = 5.0;
+
+fn nearest_string_index(hz: f32) -> Option<usize> {
+    pitch::STRINGS
+        .iter()
+        .enumerate()
+        .map(|(i, (f, _))| (i, (1200.0 * (hz / f).log2()).abs()))
+        .filter(|(_, d)| *d <= 250.0)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(i, _)| i)
+}
+
+fn current(shared: &Shared) -> Option<Reading> {
+    if let Some(p) = shared.pitch.lock().ok().and_then(|p| p.clone()) {
+        return Some(Reading { note: p.label(), cents: p.cents, hz: Some(p.hz), string: nearest_string_index(p.hz) });
+    }
+    let r = shared.pedal.lock().ok().and_then(|r| *r).filter(|r| r.running)?;
+    Some(Reading {
+        note: r.note_name()?.to_string(),
+        cents: r.deviation.unwrap_or(0) as f32,
+        hz: None,
+        string: None,
+    })
+}
+
+/// The meter: a −50…+50 cent scale, a green zone in the middle and a needle.
+/// Left of centre is flat (string too loose), right is sharp (too tight).
+fn draw_meter(area: &gtk::DrawingArea, cr: &gtk::cairo::Context, w: f64, h: f64, cents: Option<f32>) {
+    let (tr, tg, tb) = crate::theme::text_rgb();
+    let pad = 28.0;
+    let x0 = pad;
+    let x1 = w - pad;
+    let mid = w / 2.0;
+    let y = h * 0.42;
+    let at = |c: f32| mid + (c.clamp(-50.0, 50.0) as f64 / 50.0) * (x1 - mid);
+
+    // In-tune zone.
+    cr.set_source_rgba(0.26, 0.82, 0.48, 0.22);
+    let (zl, zr) = (at(-IN_TUNE), at(IN_TUNE));
+    cr.rectangle(zl, y - 22.0, zr - zl, 44.0);
+    let _ = cr.fill();
+
+    // Ticks every 10 cents, longer at 0 and ±50.
+    for c in (-50..=50).step_by(5) {
+        let x = at(c as f32);
+        let len = if c == 0 { 26.0 } else if c % 10 == 0 { 14.0 } else { 7.0 };
+        let alpha = if c == 0 { 0.9 } else { 0.35 };
+        cr.set_source_rgba(tr, tg, tb, alpha);
+        cr.set_line_width(if c == 0 { 2.5 } else { 1.5 });
+        cr.move_to(x, y - len);
+        cr.line_to(x, y + len);
+        let _ = cr.stroke();
+    }
+
+    // End labels, through Pango so ♭/♯ get a font that has them.
+    cr.set_source_rgba(tr, tg, tb, 0.55);
+    let mut font = gtk::pango::FontDescription::from_string("Adwaita Sans");
+    font.set_weight(gtk::pango::Weight::Bold);
+    font.set_absolute_size(13.0 * gtk::pango::SCALE as f64);
+    let label = |text: &str, x: f64, align: f64| {
+        let layout = area.create_pango_layout(Some(text));
+        layout.set_font_description(Some(&font));
+        let (lw, lh) = layout.pixel_size();
+        cr.move_to(x - lw as f64 * align, h - 8.0 - lh as f64);
+        pangocairo::functions::show_layout(cr, &layout);
+    };
+    label(&format!("♭ {}", crate::i18n::t("tuner.flat_side")), x0, 0.0);
+    label("0", mid, 0.5);
+    label(&format!("{} ♯", crate::i18n::t("tuner.sharp_side")), x1, 1.0);
+
+    // Needle.
+    if let Some(c) = cents {
+        let x = at(c);
+        let good = c.abs() <= IN_TUNE;
+        if good {
+            cr.set_source_rgb(0.26, 0.82, 0.48);
+        } else {
+            cr.set_source_rgb(0.94, 0.71, 0.16);
+        }
+        cr.set_line_width(5.0);
+        cr.set_line_cap(gtk::cairo::LineCap::Round);
+        cr.move_to(x, y - 34.0);
+        cr.line_to(x, y + 34.0);
+        let _ = cr.stroke();
+        cr.arc(x, y - 38.0, 6.0, 0.0, std::f64::consts::TAU);
+        let _ = cr.fill();
+    }
+}
+
 /// Build the page. `shared` must already have been started with [`start`].
 pub fn page(app: &AppRef, shared: &Shared) -> gtk::Widget {
     let clamp = adw::Clamp::new();
-    clamp.set_maximum_size(720);
-    let page = vbox(18);
-    page.set_margin_top(36);
+    clamp.set_maximum_size(760);
+    let page = vbox(16);
+    page.set_margin_top(32);
     page.set_margin_bottom(36);
     page.set_margin_start(24);
     page.set_margin_end(24);
@@ -141,35 +245,57 @@ pub fn page(app: &AppRef, shared: &Shared) -> gtk::Widget {
     head.append(&label(crate::i18n::t("tuner.hint"), &["tm-small", "tm-dim"]));
     page.append(&head);
 
+    // Note, with the flat/sharp signs lighting up on the side the string is off.
+    let note_row = hbox(28);
+    note_row.set_halign(gtk::Align::Center);
+    let flat = label("♭", &["tm-tune-side"]);
     let note = label("—", &["tm-tune-note"]);
+    note.set_width_chars(4);
     note.set_xalign(0.5);
-    page.append(&note);
+    let sharp = label("♯", &["tm-tune-side"]);
+    note_row.append(&flat);
+    note_row.append(&note);
+    note_row.append(&sharp);
+    page.append(&note_row);
 
-    let string = label("", &["tm-title-l"]);
-    string.set_xalign(0.5);
-    page.append(&string);
+    let advice = label("", &["tm-tune-advice"]);
+    advice.set_xalign(0.5);
+    page.append(&advice);
 
-    let bar = gtk::LevelBar::new();
-    bar.set_mode(gtk::LevelBarMode::Continuous);
-    bar.set_min_value(0.0);
-    bar.set_max_value(100.0);
-    bar.set_value(50.0);
-    bar.add_offset_value("low", 45.0);
-    bar.add_offset_value("high", 55.0);
-    bar.add_css_class("tm-tune-bar");
-    page.append(&bar);
+    let meter = gtk::DrawingArea::new();
+    meter.set_content_height(120);
+    meter.set_hexpand(true);
+    let needle: Rc<Cell<Option<f32>>> = Rc::new(Cell::new(None));
+    {
+        let needle = needle.clone();
+        meter.set_draw_func(move |area, cr, w, h| draw_meter(area, cr, w as f64, h as f64, needle.get()));
+    }
+    let meter_card = vbox(0);
+    meter_card.add_css_class("tm-card");
+    meter_card.append(&meter);
+    page.append(&meter_card);
 
-    let cents_row = hbox(12);
-    cents_row.set_halign(gtk::Align::Center);
-    let cents = label("", &["tm-small", "tm-dim"]);
-    let advice = label("", &["tm-title-l"]);
-    cents_row.append(&advice);
-    cents_row.append(&cents);
-    page.append(&cents_row);
+    let detail = label("", &["tm-small", "tm-faint"]);
+    detail.set_xalign(0.5);
+    page.append(&detail);
 
-    let hertz = label("", &["tm-small", "tm-faint"]);
-    hertz.set_xalign(0.5);
-    page.append(&hertz);
+    // The six open strings, low to high, so a beginner sees which one they are on.
+    let strings_row = hbox(8);
+    strings_row.set_halign(gtk::Align::Center);
+    let string_pills: Vec<gtk::Box> = pitch::STRINGS
+        .iter()
+        .enumerate()
+        .map(|(i, (_, name))| {
+            let pill = vbox(0);
+            pill.add_css_class("tm-tune-string");
+            let n = name.trim_end_matches(char::is_numeric);
+            pill.append(&label(n, &["tm-tune-string-note"]));
+            pill.append(&label(&format!("{}ª", 6 - i), &["tm-tune-string-num"]));
+            strings_row.append(&pill);
+            pill
+        })
+        .collect();
+    page.append(&strings_row);
 
     // Reference pitch: some records are tuned to A=432.
     let reference = adw::ActionRow::new();
@@ -183,6 +309,7 @@ pub fn page(app: &AppRef, shared: &Shared) -> gtk::Widget {
     mute.set_title(crate::i18n::t("tuner.mute"));
     mute.set_subtitle(crate::i18n::t("tuner.mute.sub"));
     let group = adw::PreferencesGroup::new();
+    group.set_margin_top(8);
     group.add(&reference);
     group.add(&mute);
     page.append(&group);
@@ -227,98 +354,82 @@ pub fn page(app: &AppRef, shared: &Shared) -> gtk::Widget {
         });
     }
 
-    // Poll the capture thread; 10 Hz is enough to feel live and cheap enough for a
-    // timer that runs whenever this page is visible.
+    // 20 Hz redraw. The needle is smoothed and the last note is held for a
+    // moment after the string fades, so the display does not flicker.
     {
         let shared = shared.clone();
-        let note = note.clone();
-        let string = string.clone();
-        let cents = cents.clone();
-        let advice = advice.clone();
-        let hertz = hertz.clone();
-        let bar = bar.clone();
-        let status = status.clone();
         let page_widget = page.clone();
-        glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
+        let last: Rc<Cell<Option<std::time::Instant>>> = Rc::new(Cell::new(None));
+        glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
             if !page_widget.is_mapped() {
                 return glib::ControlFlow::Continue;
             }
             let capturing = shared.capturing.load(Ordering::Relaxed);
-            let from_pedal = shared.pedal.lock().ok().and_then(|r| *r).filter(|r| r.running);
+            let pedal_on = shared.pedal.lock().ok().and_then(|r| *r).is_some_and(|r| r.running);
             status.set_text(if capturing {
                 crate::i18n::t("tuner.capturing")
-            } else if from_pedal.is_some() {
+            } else if pedal_on {
                 crate::i18n::t("tuner.pedal")
             } else {
                 crate::i18n::t("tuner.no_device")
             });
-            let audio = shared.pitch.lock().ok().and_then(|p| p.clone());
-            // No audio capture (no PipeWire, or the USB audio not routed): show
-            // what the pedal's own tuner hears instead.
-            if audio.is_none() {
-                if let Some((name, dev)) = from_pedal.and_then(|r| Some((r.note_name()?, r.deviation.unwrap_or(0)))) {
-                    note.set_text(name);
-                    string.set_text("");
-                    cents.set_text("");
-                    advice.set_text(if dev.abs() <= tankmini_core::tuner::IN_TUNE {
-                        crate::i18n::t("tuner.in_tune")
-                    } else if dev < 0 {
-                        crate::i18n::t("tuner.tighten")
-                    } else {
-                        crate::i18n::t("tuner.loosen")
-                    });
-                    bar.set_value(50.0 + dev.clamp(-50, 50) as f64);
-                    hertz.set_text("");
+
+            let reading = current(&shared);
+            if reading.is_some() {
+                last.set(Some(std::time::Instant::now()));
+            }
+            let held = last.get().is_some_and(|t| t.elapsed() < std::time::Duration::from_millis(700));
+            match reading {
+                Some(r) => {
+                    let smooth = match needle.get() {
+                        Some(prev) if (prev - r.cents).abs() < 30.0 => prev * 0.65 + r.cents * 0.35,
+                        _ => r.cents,
+                    };
+                    needle.set(Some(smooth));
+                    note.set_text(&r.note);
+                    let good = smooth.abs() <= IN_TUNE;
                     for c in ["tm-tune-flat", "tm-tune-sharp", "tm-tune-good"] {
                         note.remove_css_class(c);
                     }
-                    note.add_css_class(if dev.abs() <= tankmini_core::tuner::IN_TUNE {
-                        "tm-tune-good"
-                    } else if dev < 0 {
-                        "tm-tune-flat"
+                    note.add_css_class(if good { "tm-tune-good" } else if smooth < 0.0 { "tm-tune-flat" } else { "tm-tune-sharp" });
+                    flat.set_opacity(if !good && smooth < 0.0 { 1.0 } else { 0.18 });
+                    sharp.set_opacity(if !good && smooth > 0.0 { 1.0 } else { 0.18 });
+                    advice.set_text(&if good {
+                        format!("✓ {}", crate::i18n::t("tuner.in_tune"))
+                    } else if smooth < 0.0 {
+                        format!("{} · {}", crate::i18n::t("tuner.below"), crate::i18n::t("tuner.tighten"))
                     } else {
-                        "tm-tune-sharp"
+                        format!("{} · {}", crate::i18n::t("tuner.above"), crate::i18n::t("tuner.loosen"))
                     });
-                    return glib::ControlFlow::Continue;
-                }
-            }
-            match audio {
-                Some(p) => {
-                    note.set_text(&p.label());
-                    string.set_text(
-                        &pitch::nearest_string(&p)
-                            .map(|s| format!("{} {s}", crate::i18n::t("tuner.string")))
-                            .unwrap_or_else(|| "—".into()),
-                    );
-                    cents.set_text(&format!("{:+.1} cents", p.cents));
-                    let advice_text = match p.advice() {
-                        Some("aperte a corda") => crate::i18n::t("tuner.tighten"),
-                        Some("afrouxe a corda") => crate::i18n::t("tuner.loosen"),
-                        _ => crate::i18n::t("tuner.in_tune"),
-                    };
-                    advice.set_text(advice_text);
-                    bar.set_value((50.0 + p.cents.clamp(-50.0, 50.0)) as f64);
-                    hertz.set_text(&format!("{:.2} Hz", p.hz));
-                    note.remove_css_class("tm-tune-flat");
-                    note.remove_css_class("tm-tune-sharp");
-                    note.remove_css_class("tm-tune-good");
-                    note.add_css_class(if p.in_tune() {
-                        "tm-tune-good"
-                    } else if p.cents < 0.0 {
-                        "tm-tune-flat"
-                    } else {
-                        "tm-tune-sharp"
+                    detail.set_text(&match r.hz {
+                        Some(hz) => format!("{:+.0} cents · {hz:.1} Hz", smooth),
+                        None => format!("{:+.0}", smooth),
                     });
+                    for (i, pill) in string_pills.iter().enumerate() {
+                        if r.string == Some(i) {
+                            pill.add_css_class("active");
+                        } else {
+                            pill.remove_css_class("active");
+                        }
+                    }
                 }
+                None if held => {}
                 None => {
+                    needle.set(None);
                     note.set_text("—");
-                    string.set_text(if capturing { crate::i18n::t("tuner.listening") } else { "" });
-                    cents.set_text("");
-                    advice.set_text("");
-                    hertz.set_text("");
-                    bar.set_value(50.0);
+                    for c in ["tm-tune-flat", "tm-tune-sharp", "tm-tune-good"] {
+                        note.remove_css_class(c);
+                    }
+                    flat.set_opacity(0.18);
+                    sharp.set_opacity(0.18);
+                    advice.set_text(if capturing || pedal_on { crate::i18n::t("tuner.listening") } else { "" });
+                    detail.set_text("");
+                    for pill in &string_pills {
+                        pill.remove_css_class("active");
+                    }
                 }
             }
+            meter.queue_draw();
             glib::ControlFlow::Continue
         });
     }

@@ -87,8 +87,8 @@ const TABLE: &[(&str, &str, &str)] = &[
     ("tuner.title", "AFINADOR", "TUNER"),
     (
         "tuner.hint",
-        "Toque uma corda solta. O app escuta a saída da pedaleira pelo cabo USB.",
-        "Play one open string. The app listens to the pedal's output over the USB cable.",
+        "Toque uma corda solta. O ponteiro à esquerda do centro quer dizer que a corda está frouxa; à direita, esticada demais.",
+        "Play one open string. Left of centre means the string is too loose; right of centre, too tight.",
     ),
     ("tuner.reference", "Referência", "Reference"),
     ("tuner.reference.sub", "Frequência do Lá acima do Dó central (A4)", "Pitch of the A above middle C (A4)"),
@@ -99,6 +99,10 @@ const TABLE: &[(&str, &str, &str)] = &[
     ("tuner.tighten", "aperte a corda", "tighten the string"),
     ("tuner.loosen", "afrouxe a corda", "loosen the string"),
     ("tuner.string", "corda", "string"),
+    ("tuner.below", "Abaixo do tom", "Below the note"),
+    ("tuner.flat_side", "grave", "flat"),
+    ("tuner.sharp_side", "agudo", "sharp"),
+    ("tuner.above", "Acima do tom", "Above the note"),
     ("tuner.mute", "Silenciar enquanto afina", "Mute while tuning"),
     (
         "tuner.mute.sub",
