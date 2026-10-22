@@ -109,6 +109,7 @@ pub fn build(app: &AppRef) {
     rail_tabs.add_css_class("tm-rail-tabs");
     rail_tabs.add_css_class("round");
     rail_tabs.set_homogeneous(false);
+    rail_tabs.set_can_shrink(true);
     for (name, text) in [("pedal", "Pedaleira"), ("library", "Biblioteca"), ("setlists", "Setlists")] {
         let t = adw::Toggle::new();
         t.set_name(Some(name));
@@ -146,31 +147,41 @@ pub fn build(app: &AppRef) {
     let stack = gtk::Stack::new();
     stack.set_transition_type(gtk::StackTransitionType::Crossfade);
     stack.set_transition_duration(180);
+    // Only the visible page should set the window's minimum size: the bytes view
+    // in the editor page is much wider than the play page.
+    stack.set_hhomogeneous(false);
+    stack.set_vhomogeneous(false);
 
     let (welcome, welcome_status, welcome_fix) = welcome_page(app);
     stack.add_named(&welcome, Some("welcome"));
 
     let play_box = vbox(0);
+    play_box.set_margin_bottom(28);
     let play_scroll = gtk::ScrolledWindow::builder()
-        .hscrollbar_policy(gtk::PolicyType::Never)
+        .hscrollbar_policy(gtk::PolicyType::Automatic)
+        .min_content_width(0)
         .child(&play_box)
         .build();
     play_scroll.add_css_class("tm-page");
+    play_scroll.set_overlay_scrolling(false);
     stack.add_named(&play_scroll, Some("play"));
 
     let edit_box = vbox(0);
+    edit_box.set_margin_bottom(28);
     let edit_scroll = gtk::ScrolledWindow::builder()
-        .hscrollbar_policy(gtk::PolicyType::Never)
+        .hscrollbar_policy(gtk::PolicyType::Automatic)
+        .min_content_width(0)
         .child(&edit_box)
         .build();
     edit_scroll.add_css_class("tm-page");
+    edit_scroll.set_overlay_scrolling(false);
     stack.add_named(&edit_scroll, Some("edit"));
 
     let split = adw::OverlaySplitView::new();
     split.set_sidebar(Some(&rail));
     split.set_content(Some(&stack));
-    split.set_min_sidebar_width(290.0);
-    split.set_max_sidebar_width(330.0);
+    split.set_min_sidebar_width(240.0);
+    split.set_max_sidebar_width(320.0);
     split
         .bind_property("show-sidebar", &sidebar_btn, "active")
         .bidirectional()
@@ -238,6 +249,24 @@ pub fn build(app: &AppRef) {
     toasts.set_child(Some(&toolbar));
     window.set_content(Some(&toasts));
 
+    if std::env::var_os("TM_DEBUG_MEASURE").is_some() {
+        let probes: Vec<(&str, gtk::Widget)> = vec![
+            ("actions", actions.clone().upcast()),
+            ("header", header.clone().upcast()),
+            ("split", split.clone().upcast()),
+            ("stack", stack.clone().upcast()),
+            ("rail", rail.clone().upcast()),
+            ("play_box", play_box.clone().upcast()),
+            ("edit_box", edit_box.clone().upcast()),
+        ];
+        gtk::glib::idle_add_local_once(move || {
+            for (name, w) in probes {
+                let (min, nat, _, _) = w.measure(gtk::Orientation::Horizontal, -1);
+                eprintln!("[measure] {name}: min={min} natural={nat}");
+            }
+        });
+    }
+
     // Narrow windows: the sidebar becomes an overlay.
     let bp = adw::Breakpoint::new(adw::BreakpointCondition::new_length(
         adw::BreakpointConditionLengthType::MaxWidth,
@@ -248,6 +277,34 @@ pub fn build(app: &AppRef) {
     bp.add_setter(&save_all_btn, "visible", Some(&false.to_value()));
     bp.add_setter(&brand, "visible", Some(&false.to_value()));
     window.add_breakpoint(bp);
+
+    // The action bar is the widest row in the window: shed the secondary
+    // actions progressively instead of letting the bar clip.
+    let bp_wide = adw::Breakpoint::new(adw::BreakpointCondition::new_length(
+        adw::BreakpointConditionLengthType::MaxWidth,
+        1180.0,
+        adw::LengthUnit::Sp,
+    ));
+    bp_wide.add_setter(&save_all_btn, "visible", Some(&false.to_value()));
+    window.add_breakpoint(bp_wide);
+
+    let bp_mid = adw::Breakpoint::new(adw::BreakpointCondition::new_length(
+        adw::BreakpointConditionLengthType::MaxWidth,
+        1040.0,
+        adw::LengthUnit::Sp,
+    ));
+    bp_mid.add_setter(&ab_btn, "visible", Some(&false.to_value()));
+    window.add_breakpoint(bp_mid);
+
+    let bp_small = adw::Breakpoint::new(adw::BreakpointCondition::new_length(
+        adw::BreakpointConditionLengthType::MaxWidth,
+        950.0,
+        adw::LengthUnit::Sp,
+    ));
+    bp_small.add_setter(&undo_btn, "visible", Some(&false.to_value()));
+    bp_small.add_setter(&redo_btn, "visible", Some(&false.to_value()));
+    bp_small.add_setter(&dirty_label, "visible", Some(&false.to_value()));
+    window.add_breakpoint(bp_small);
 
     let ui = Ui {
         toasts,

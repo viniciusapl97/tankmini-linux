@@ -46,6 +46,7 @@ headerbar.tm-header {
 /* ---------- sidebar ---------- */
 .tm-rail { background: @tm_bg; border-right: 1px solid @tm_hair; }
 .tm-rail-tabs { margin: 10px 12px 6px 12px; }
+.tm-rail-tabs toggle { font-size: 12px; padding: 3px 6px; }
 .tm-search {
   margin: 4px 12px 8px 12px;
   border-radius: 999px;
@@ -149,7 +150,7 @@ headerbar.tm-header {
   border: 1px solid @tm_hair;
   border-radius: 20px;
   padding: 14px 16px;
-  min-width: 190px;
+  min-width: 150px;
   transition: background 120ms ease, border-color 120ms ease;
 }
 .tm-sound:hover { background: @tm_surface_hi; border-color: @tm_hair_hi; }
@@ -227,7 +228,7 @@ togglebutton.tm-ab:checked, button.tm-ab:checked { background: @tm_warn_soft; co
   border: 1px solid @tm_hair;
   border-radius: 22px;
   padding: 18px;
-  min-width: 150px;
+  min-width: 120px;
 }
 .tm-choice:checked { border-color: @tm_text; background: @tm_surface_hi; }
 .tm-step-num {

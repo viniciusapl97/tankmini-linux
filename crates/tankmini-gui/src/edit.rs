@@ -64,7 +64,8 @@ fn header(app: &AppRef) -> gtk::Box {
     rename.add_css_class("tm-pill");
     rename.set_action_name(Some("win.rename"));
     rename.set_valign(gtk::Align::Center);
-    let lib = gtk::Button::with_label("Salvar na biblioteca");
+    let lib = gtk::Button::with_label("Salvar");
+    lib.set_tooltip_text(Some("Guardar este som na biblioteca do computador (Ctrl+D)"));
     lib.add_css_class("tm-pill");
     lib.set_action_name(Some("win.library-save"));
     lib.set_valign(gtk::Align::Center);
@@ -419,7 +420,9 @@ pub(crate) fn param_knobs(app: &AppRef, module: usize, size: KnobSize) -> Vec<Kn
         if raw_name.is_none() && !show_all && value == 0 {
             continue;
         }
-        let text = st.param_label(role, unit, param).unwrap_or_else(|| format!("#{}", param + 1));
+        let text = st
+            .param_label(role, unit, param)
+            .unwrap_or_else(|| format!("Ajuste {}", param + 1));
         let help = raw_name.map(catalog::param_help).unwrap_or(catalog::param_help(""));
         let offset = Patch::param_offset(module, param);
         let tip = if st.settings.show_advanced {
@@ -463,7 +466,17 @@ fn bytes_panel(app: &AppRef) -> gtk::Box {
     let buffer = view.buffer();
     let tag = gtk::TextTag::builder().name("diff").weight(800).underline(gtk::pango::Underline::Single).build();
     buffer.tag_table().add(&tag);
-    wrap.append(&view);
+    // The hexdump is as wide as its longest line; without its own scroll area it
+    // becomes the window's minimum width and the whole layout overflows.
+    let scroll = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Automatic)
+        .vscrollbar_policy(gtk::PolicyType::Automatic)
+        .min_content_width(0)
+        .min_content_height(220)
+        .vexpand(true)
+        .child(&view)
+        .build();
+    wrap.append(&scroll);
     app.ui().bytes_view.replace(Some(view));
     wrap
 }

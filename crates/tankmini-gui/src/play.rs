@@ -20,7 +20,7 @@ pub fn refresh(app: &AppRef) {
     page.set_margin_start(32);
     page.set_margin_end(32);
     let clamp = adw::Clamp::new();
-    clamp.set_maximum_size(1020);
+    clamp.set_maximum_size(1140);
     clamp.set_tightening_threshold(700);
     clamp.set_child(Some(&page));
     root.append(&clamp);
@@ -159,8 +159,8 @@ fn quick_blocks(app: &AppRef) -> gtk::Box {
     wrap.append(&head);
     let flow = gtk::FlowBox::new();
     flow.set_selection_mode(gtk::SelectionMode::None);
-    flow.set_column_spacing(8);
-    flow.set_row_spacing(8);
+    flow.set_column_spacing(10);
+    flow.set_row_spacing(10);
     flow.set_max_children_per_line(6);
     wrap.append(&flow);
     TOGGLE_ROW.with(|t| *t.borrow_mut() = Some(flow));

@@ -49,7 +49,9 @@ pub fn pedal(app: &AppRef, position: usize, module: usize, realistic: bool) -> g
     if !on {
         body.add_css_class("off");
     }
-    body.set_size_request(if realistic { 348 } else { 300 }, -1);
+    // Narrower minimum so the board can reflow to two or one column on small
+    // windows instead of forcing a horizontal overflow.
+    body.set_size_request(if realistic { 280 } else { 230 }, -1);
 
     let led = hbox(0);
     if realistic {
