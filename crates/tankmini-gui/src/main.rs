@@ -5,7 +5,7 @@
 //! preset block are not decoded yet (see `docs/protocol/`). Everything the app
 //! writes is backed up first and verified by reading the block back.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -60,6 +60,16 @@ fn set_status(ui: &Ui, text: &str) {
     ui.status.set_text(text);
 }
 
+/// Run a closure with an opened pedal, mapping errors to user-facing strings.
+fn with_pedal<T>(f: impl FnOnce(&mut Pedal) -> Result<T, String>) -> Result<T, String> {
+    let device = find_pedal().ok_or_else(|| {
+        "Pedaleira não encontrada. Confira o cabo USB e as permissões de /dev/snd/midiC*.".to_string()
+    })?;
+    let mut pedal = Pedal::open(&device.midi_path)
+        .map_err(|e| format!("Não consegui abrir {}: {e}", device.midi_path.display()))?;
+    f(&mut pedal)
+}
+
 fn load_from_device(state: &Shared) -> Result<(), String> {
     let device = find_pedal().ok_or_else(|| {
         "Pedaleira não encontrada. Confira o cabo USB e as permissões de /dev/snd/midiC*.".to_string()
@@ -86,12 +96,15 @@ fn load_from_device(state: &Shared) -> Result<(), String> {
     Ok(())
 }
 
-fn refresh(ui: &Ui, state: &Shared) {
+fn refresh(ui: &Ui, state: &Shared, suppress: &Rc<Cell<bool>>) {
     let st = state.borrow();
     ui.firmware.set_text(if st.firmware.is_empty() { "—" } else { &st.firmware });
     ui.node.set_text(if st.node.is_empty() { "—" } else { &st.node });
     if let Some(slot) = st.slot {
+        // Programmatic change: do not treat it as a user slot switch.
+        suppress.set(true);
         ui.slot.set_selected(slot as u32);
+        suppress.set(false);
     }
 
     while let Some(child) = ui.records.first_child() {
@@ -280,25 +293,30 @@ fn build_window(app: &Application) -> (ApplicationWindow, Ui, Shared) {
     (window, ui, state)
 }
 
-fn connect(ui: &Ui, state: &Shared) {
+fn connect(ui: &Ui, state: &Shared, suppress: &Rc<Cell<bool>>) {
     // Reload from the pedal.
     {
         let ui = ui.clone();
         let state = state.clone();
-        ui.reload.connect_clicked(move |_| {
+        let suppress = suppress.clone();
+        ui.clone().reload.connect_clicked(move |_| {
             match load_from_device(&state) {
                 Ok(()) => set_status(&ui, "Conectado."),
                 Err(e) => set_status(&ui, &e),
             }
-            refresh(&ui, &state);
+            refresh(&ui, &state, &suppress);
         });
     }
 
-    // Slot selection.
+    // Slot selection: sends the select command and reloads the block.
     {
         let ui = ui.clone();
         let state = state.clone();
-        ui.slot.connect_selected_notify(move |dropdown| {
+        let suppress = suppress.clone();
+        ui.clone().slot.connect_selected_notify(move |dropdown| {
+            if suppress.get() {
+                return;
+            }
             let index = dropdown.selected();
             if index > 20 {
                 return;
@@ -320,10 +338,10 @@ fn connect(ui: &Ui, state: &Shared) {
                         ),
                         Err(e) => set_status(&ui, &e),
                     }
-                    refresh(&ui, &state);
                 }
                 Err(e) => set_status(&ui, &format!("Falha ao trocar de preset: {e}")),
             }
+            refresh(&ui, &state, &suppress);
         });
     }
 
@@ -331,7 +349,7 @@ fn connect(ui: &Ui, state: &Shared) {
     {
         let ui = ui.clone();
         let state = state.clone();
-        ui.backup.connect_clicked(move |_| {
+        ui.clone().backup.connect_clicked(move |_| {
             let st = state.borrow();
             let Some(preset) = st.preset.as_ref() else {
                 return;
@@ -344,11 +362,12 @@ fn connect(ui: &Ui, state: &Shared) {
         });
     }
 
-    // Apply: backup the pedal's current block, write ours, verify the read-back.
+    // Apply: back up what is on the pedal, write ours, verify the read-back.
     {
         let ui = ui.clone();
         let state = state.clone();
-        ui.apply.connect_clicked(move |_| {
+        let suppress = suppress.clone();
+        ui.clone().apply.connect_clicked(move |_| {
             let (preset, slot) = {
                 let st = state.borrow();
                 match &st.preset {
@@ -357,7 +376,6 @@ fn connect(ui: &Ui, state: &Shared) {
                 }
             };
             let result = with_pedal(|pedal| {
-                // Always keep a copy of what is on the pedal before overwriting.
                 if let Some(current) = pedal.read_preset().map_err(|e| e.to_string())? {
                     let store = BackupStore::new(BackupStore::default_root());
                     let path = store
@@ -365,33 +383,29 @@ fn connect(ui: &Ui, state: &Shared) {
                         .map_err(|e| e.to_string())?;
                     eprintln!("[tankmini] backup before apply: {}", path.display());
                 }
-                let report = pedal.write_preset(&preset).map_err(|e| e.to_string())?;
-                Ok(report)
+                pedal.write_preset(&preset).map_err(|e| e.to_string())
             });
             match result {
-                Ok(report) => {
-                    if report.verified {
-                        state.borrow_mut().original = Some(preset);
-                        set_status(
-                            &ui,
-                            &format!(
-                                "Aplicado e verificado ({}/{} chunks ACK).",
-                                report.chunks_ok, report.chunks
-                            ),
-                        );
-                    } else {
-                        set_status(
-                            &ui,
-                            &format!(
-                                "ATENÇÃO: read-back divergiu ({}/{} chunks ACK). Use o backup.",
-                                report.chunks_ok, report.chunks
-                            ),
-                        );
-                    }
+                Ok(report) if report.verified => {
+                    state.borrow_mut().original = Some(preset);
+                    set_status(
+                        &ui,
+                        &format!(
+                            "Aplicado e verificado ({}/{} chunks ACK).",
+                            report.chunks_ok, report.chunks
+                        ),
+                    );
                 }
+                Ok(report) => set_status(
+                    &ui,
+                    &format!(
+                        "ATENÇÃO: read-back divergiu ({}/{} chunks ACK). Use o backup.",
+                        report.chunks_ok, report.chunks
+                    ),
+                ),
                 Err(e) => set_status(&ui, &format!("Falha ao aplicar: {e}")),
             }
-            refresh(&ui, &state);
+            refresh(&ui, &state, &suppress);
         });
     }
 
@@ -399,7 +413,8 @@ fn connect(ui: &Ui, state: &Shared) {
     {
         let ui = ui.clone();
         let state = state.clone();
-        ui.restore.connect_clicked(move |_| {
+        let suppress = suppress.clone();
+        ui.clone().restore.connect_clicked(move |_| {
             let store = BackupStore::new(BackupStore::default_root());
             let newest = match store.list() {
                 Ok(list) => list.into_iter().next(),
@@ -419,16 +434,12 @@ fn connect(ui: &Ui, state: &Shared) {
                     return;
                 }
             };
-            let result = with_pedal(|pedal| {
-                let report = pedal.write_preset(&preset).map_err(|e| e.to_string())?;
-                Ok(report)
-            });
+            let result = with_pedal(|pedal| pedal.write_preset(&preset).map_err(|e| e.to_string()));
             match result {
                 Ok(report) if report.verified => {
                     set_status(&ui, &format!("Restaurado de {}", path.display()));
-                    match load_from_device(&state) {
-                        Ok(()) => {}
-                        Err(e) => set_status(&ui, &e),
+                    if let Err(e) = load_from_device(&state) {
+                        set_status(&ui, &e);
                     }
                 }
                 Ok(report) => set_status(
@@ -437,7 +448,7 @@ fn connect(ui: &Ui, state: &Shared) {
                 ),
                 Err(e) => set_status(&ui, &format!("Falha ao restaurar: {e}")),
             }
-            refresh(&ui, &state);
+            refresh(&ui, &state, &suppress);
         });
     }
 }
@@ -447,13 +458,14 @@ fn main() -> glib::ExitCode {
 
     app.connect_activate(move |app| {
         let (window, ui, state) = build_window(app);
-        connect(&ui, &state);
+        let suppress: Rc<Cell<bool>> = Rc::new(Cell::new(false));
+        connect(&ui, &state, &suppress);
 
         match load_from_device(&state) {
             Ok(()) => set_status(&ui, "Conectado."),
             Err(e) => set_status(&ui, &e),
         }
-        refresh(&ui, &state);
+        refresh(&ui, &state, &suppress);
         window.present();
     });
 
