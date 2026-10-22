@@ -66,6 +66,7 @@ pub struct State {
 pub enum View {
     Play,
     Edit,
+    Tune,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

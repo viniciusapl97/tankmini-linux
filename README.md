@@ -14,6 +14,8 @@ and the app finds it.
 
 ![Tela Editar](docs/screenshots/02-editar.png)
 
+![Afinador](docs/screenshots/03-afinador.png)
+
 The interface is in Brazilian Portuguese. Everything below works without the phone
 app — and much of it the phone app does not offer at all (preset names, backups,
 export/import, a sound library, undo, a real signal-chain view).
@@ -44,6 +46,15 @@ window, keyboard, backups, bulk editing, and a documented protocol.
 - Undo/redo, A/B against the saved version, copy/paste a block, factory values.
 - Raw bytes panel with unsaved bytes highlighted.
 - Backup before every write, read-back verification after every write.
+
+**Afinar**
+- Chromatic tuner reading the pedal's own USB audio input: note, cents, which way to
+  turn the peg ("aperte"/"afrouxe a corda") and the nearest string of standard tuning.
+- Adjustable A4 reference (415–466 Hz), live capture status, works while the pedal is
+  also being monitored through the speakers.
+- Detection is a tested autocorrelation/YIN implementation that survives the case a
+  naive detector fails: a plucked string whose second harmonic is louder than the
+  fundamental.
 
 **Utility**
 - Local preset names (the pedal has no name field, only bank + A/B/C).

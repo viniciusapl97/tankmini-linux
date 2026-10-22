@@ -14,6 +14,7 @@ mod play;
 mod rail;
 mod theme;
 mod toggle;
+mod tuner;
 mod widgets;
 mod window;
 

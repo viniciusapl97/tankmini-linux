@@ -19,6 +19,7 @@ pub struct Ui {
     pub welcome_status: gtk::Label,
     pub welcome_fix: gtk::Box,
     pub rail_tabs: crate::toggle::ToggleGroup,
+    pub tuner: crate::tuner::Shared,
     pub search: gtk::SearchEntry,
     pub rail_stack: gtk::Stack,
     pub preset_list: gtk::ListBox,
@@ -66,6 +67,7 @@ pub fn build(app: &AppRef) {
     for (name, text, tip) in [
         ("play", "Tocar", "Sons prontos e controles simples (Ctrl+1)"),
         ("edit", "Editar", "Todos os blocos e parâmetros (Ctrl+2)"),
+        ("tune", "Afinar", "Afinador cromático pela entrada USB (Ctrl+3)"),
     ] {
         let t = crate::toggle::Toggle::new();
         t.set_name(Some(name));
@@ -176,6 +178,11 @@ pub fn build(app: &AppRef) {
     edit_scroll.add_css_class("tm-page");
     edit_scroll.set_overlay_scrolling(false);
     stack.add_named(&edit_scroll, Some("edit"));
+
+    // The tuner owns a capture thread; it starts once and reconnects on unplug.
+    let tuner_shared = crate::tuner::Shared::new(440.0);
+    crate::tuner::start(&tuner_shared);
+    stack.add_named(&crate::tuner::page(app, &tuner_shared), Some("tune"));
 
     let split = adw::OverlaySplitView::new();
     split.set_sidebar(Some(&rail));
@@ -327,6 +334,7 @@ pub fn build(app: &AppRef) {
         welcome_status,
         welcome_fix,
         rail_tabs,
+        tuner: tuner_shared,
         search,
         rail_stack,
         preset_list,
@@ -400,7 +408,11 @@ fn wire(app: &AppRef) {
     {
         let app = app.clone();
         ui.modes.connect_active_name_notify(move |g| {
-            let view = if g.active_name().as_deref() == Some("edit") { View::Edit } else { View::Play };
+            let view = match g.active_name().as_deref() {
+                Some("edit") => View::Edit,
+                Some("tune") => View::Tune,
+                _ => View::Play,
+            };
             {
                 let mut st = app.state.borrow_mut();
                 if st.view == view {
@@ -561,6 +573,7 @@ fn install_actions(app: &AppRef) {
     add("reload", Box::new(|a| a.send(Command::Reload)));
     add("view-play", Box::new(|a| a.ui().modes.set_active_name(Some("play"))));
     add("view-edit", Box::new(|a| a.ui().modes.set_active_name(Some("edit"))));
+    add("view-tune", Box::new(|a| a.ui().modes.set_active_name(Some("tune"))));
     add("ab", Box::new(|a| {
         let on = !a.state.borrow().comparing;
         a.ui().ab_btn.set_active(on);
@@ -602,6 +615,7 @@ fn install_actions(app: &AppRef) {
         ("win.reload", &["<Control>r"]),
         ("win.view-play", &["<Control>1"]),
         ("win.view-edit", &["<Control>2"]),
+        ("win.view-tune", &["<Control>3"]),
         ("win.ab", &["<Control>b"]),
         ("win.bypass", &["<Control><Shift>b"]),
         ("win.search", &["<Control>f"]),
@@ -623,7 +637,11 @@ pub fn refresh(app: &AppRef) {
         let st = app.state.borrow();
         (st.table.is_some(), st.view, st.rail)
     };
-    ui.modes.set_active_name(Some(if view == View::Edit { "edit" } else { "play" }));
+    ui.modes.set_active_name(Some(match view {
+        View::Edit => "edit",
+        View::Tune => "tune",
+        View::Play => "play",
+    }));
     ui.rail_tabs.set_active_name(Some(match rail {
         RailTab::Pedal => "pedal",
         RailTab::Library => "library",
@@ -636,6 +654,9 @@ pub fn refresh(app: &AppRef) {
             View::Play => {
                 crate::play::refresh(app);
                 ui.stack.set_visible_child_name("play");
+            }
+            View::Tune => {
+                ui.stack.set_visible_child_name("tune");
             }
             View::Edit => {
                 crate::edit::refresh(app);

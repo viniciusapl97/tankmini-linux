@@ -138,7 +138,13 @@ impl ToggleGroup {
             b.set_active(b.widget_name() == name);
         }
         *self.inner.quiet.borrow_mut() = false;
+        let changed = self.inner.active.borrow().as_deref() != Some(name);
         *self.inner.active.borrow_mut() = Some(name.to_string());
+        if changed {
+            for cb in self.inner.callbacks.borrow().iter() {
+                cb(self);
+            }
+        }
     }
 
     pub fn active_name(&self) -> Option<String> {

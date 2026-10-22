@@ -373,3 +373,15 @@ menubutton.tm-icon > button:hover, menubutton.tm-icon > button:checked { backgro
   font-feature-settings: "tnum";
   color: @tm_dim;
 }
+
+/* ---------- tuner ---------- */
+.tm-tune-note {
+  font-size: 96px;
+  font-weight: 800;
+  letter-spacing: -2px;
+}
+.tm-tune-good { color: #43d17a; }
+.tm-tune-flat { color: #f0b429; }
+.tm-tune-sharp { color: #f0b429; }
+.tm-tune-bar trough { min-height: 10px; border-radius: 99px; background: @tm_surface_hi; }
+.tm-tune-bar progress { border-radius: 99px; background: #43d17a; }
