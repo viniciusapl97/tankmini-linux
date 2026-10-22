@@ -13,6 +13,7 @@ mod pedal;
 mod play;
 mod rail;
 mod theme;
+mod toggle;
 mod widgets;
 mod window;
 

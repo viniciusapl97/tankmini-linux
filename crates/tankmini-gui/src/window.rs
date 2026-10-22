@@ -14,11 +14,11 @@ pub struct Ui {
     pub toasts: adw::ToastOverlay,
     pub banner: adw::Banner,
     pub split: adw::OverlaySplitView,
-    pub modes: adw::ToggleGroup,
+    pub modes: crate::toggle::ToggleGroup,
     pub stack: gtk::Stack,
     pub welcome_status: gtk::Label,
     pub welcome_fix: gtk::Box,
-    pub rail_tabs: adw::ToggleGroup,
+    pub rail_tabs: crate::toggle::ToggleGroup,
     pub search: gtk::SearchEntry,
     pub rail_stack: gtk::Stack,
     pub preset_list: gtk::ListBox,
@@ -30,7 +30,7 @@ pub struct Ui {
     pub bytes_view: RefCell<Option<gtk::TextView>>,
     pub status_dot: gtk::Box,
     pub status_label: gtk::Label,
-    pub spinner: adw::Spinner,
+    pub spinner: gtk::Spinner,
     pub dirty_label: gtk::Label,
     pub undo_btn: gtk::Button,
     pub redo_btn: gtk::Button,
@@ -60,20 +60,20 @@ pub fn build(app: &AppRef) {
     brand.append(&label("TANK MINI", &["tm-brand"]));
     header.pack_start(&brand);
 
-    let modes = adw::ToggleGroup::new();
+    let modes = crate::toggle::ToggleGroup::new();
     modes.add_css_class("tm-modes");
     modes.add_css_class("round");
     for (name, text, tip) in [
         ("play", "Tocar", "Sons prontos e controles simples (Ctrl+1)"),
         ("edit", "Editar", "Todos os blocos e parâmetros (Ctrl+2)"),
     ] {
-        let t = adw::Toggle::new();
+        let t = crate::toggle::Toggle::new();
         t.set_name(Some(name));
         t.set_label(Some(text));
         t.set_tooltip(tip);
         modes.add(t);
     }
-    header.set_title_widget(Some(&modes));
+    header.set_title_widget(Some(&modes.root));
 
     let menu = gio::Menu::new();
     let s1 = gio::Menu::new();
@@ -105,18 +105,18 @@ pub fn build(app: &AppRef) {
     // ---- sidebar ----
     let rail = vbox(0);
     rail.add_css_class("tm-rail");
-    let rail_tabs = adw::ToggleGroup::new();
+    let rail_tabs = crate::toggle::ToggleGroup::new();
     rail_tabs.add_css_class("tm-rail-tabs");
     rail_tabs.add_css_class("round");
     rail_tabs.set_homogeneous(false);
     rail_tabs.set_can_shrink(true);
     for (name, text) in [("pedal", "Pedaleira"), ("library", "Biblioteca"), ("setlists", "Setlists")] {
-        let t = adw::Toggle::new();
+        let t = crate::toggle::Toggle::new();
         t.set_name(Some(name));
         t.set_label(Some(text));
         rail_tabs.add(t);
     }
-    rail.append(&rail_tabs);
+    rail.append(&rail_tabs.root);
     let search = gtk::SearchEntry::new();
     search.set_placeholder_text(Some("Buscar sons"));
     search.add_css_class("tm-search");
@@ -197,7 +197,7 @@ pub fn build(app: &AppRef) {
     status_dot.add_css_class("tm-dot");
     status_dot.set_valign(gtk::Align::Center);
     let status_label = label("", &[]);
-    let spinner = adw::Spinner::new();
+    let spinner = gtk::Spinner::new();
     spinner.set_visible(false);
     status.append(&status_dot);
     status.append(&status_label);
@@ -735,6 +735,11 @@ pub fn refresh_status(app: &AppRef) {
         format!("{} — ao vivo: o que você ajusta toca na hora, sem salvar", st.node)
     }));
     ui.spinner.set_visible(st.busy);
+    if st.busy {
+        ui.spinner.start();
+    } else {
+        ui.spinner.stop();
+    }
 }
 
 pub fn refresh_actions(app: &AppRef) {

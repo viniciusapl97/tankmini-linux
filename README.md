@@ -1,99 +1,203 @@
-# tankmini-linux
+# TANK MINI for Linux
 
-Native Linux control app for the **M-VAVE TANK MINI** guitar/bass multi-effects pedal,
-built on a reverse-engineered USB-MIDI protocol instead of the official M-EFCS app.
+A native Linux app for the **M-VAVE TANK MINI** guitar/bass multi-effects pedal. It
+talks to the pedal over plain USB-MIDI, using a protocol reverse-engineered from the
+official M-EFCS Android app and confirmed byte by byte on real hardware.
+
+No Android phone, no proprietary runtime, no cloud: plug the pedal in with a USB cable
+and the app finds it.
+
+![Tela Tocar](docs/screenshots/01-tocar.png)
+
+![Tela Editar](docs/screenshots/02-editar.png)
+
+The interface is in Brazilian Portuguese. Everything below works without the phone
+app — and much of it the phone app does not offer at all (preset names, backups,
+export/import, a sound library, undo, a real signal-chain view).
+
+## Why
+
+The pedal is good; the vendor app is not. It needs an Android phone, edits one preset
+at a time, and its notion of "save" is generous. This project keeps the pedal's own
+sound engine — no firmware is touched — and adds what a desktop can give you: a real
+window, keyboard, backups, bulk editing, and a documented protocol.
+
+## Features
+
+**Tocar (for playing)**
+- Current preset with four big knobs: Volume, Drive, Brilho, Ambiente.
+- Every effect as a coloured pill, on/off with one click.
+- "Sons prontos": ready-made starting points per instrument (guitarra, violão, baixo).
+- First-run assistant that explains the pedal and the app.
+
+**Editar (for tweaking)**
+- The six blocks drawn as a pedalboard in signal order, with the model on each card
+  and the LED/power state.
+- Every parameter of every block, with real names and units (cab cuts in Hz,
+  model-specific knobs).
+- Chain reorder by drag or arrows — the pedal allows any order and so does the app.
+- Live editing through the pedal's edit buffer: the sound changes while you turn a
+  knob; flash is only written when you ask.
+- Undo/redo, A/B against the saved version, copy/paste a block, factory values.
+- Raw bytes panel with unsaved bytes highlighted.
+- Backup before every write, read-back verification after every write.
+
+**Utility**
+- Local preset names (the pedal has no name field, only bank + A/B/C).
+- Export/import a single preset or the whole table, copy a preset to another slot.
+- Factory reset from a byte-exact embedded factory table, behind a confirmation.
+- Sound library with tags and favourites, setlists, search, backups browser.
+- Hot-plug, footswitch-follow, theme (dark/light/system), preferences, keyboard
+  shortcuts (`Ctrl+?`).
+- CLI with `--json` output for scripting.
+
+## Requirements
+
+| | |
+|---|---|
+| OS | any Linux with USB-MIDI (ALSA `rawmidi`); no distro-specific code |
+| Toolkit | **GTK 4.14+** and **libadwaita 1.5+** |
+| Rust | 1.75 or newer |
+| Device | M-VAVE TANK MINI over USB (`4c4a:c755`), firmware `TANK MINI_004` tested |
+
+Current releases of Arch, Fedora 40+, Ubuntu 24.04+, Debian 13, openSUSE Tumbleweed
+and NixOS unstable ship toolkits new enough. On older releases the toolkit itself is
+too old — there is nothing distro-specific to patch, you need a newer libadwaita
+(build it, use a Flatpak, or use a current distro).
+
+The app opens `/dev/snd/midiC*D*` directly, so your user must be allowed to. On most
+desktops that is automatic; if the app reports a permission error:
+
+```sh
+sudo usermod -aG audio "$USER"   # then log out and back in
+```
+
+## Install
+
+```sh
+git clone https://github.com/viniciusapl97/tankmini-linux
+cd tankmini-linux
+
+# dependencies — pick your distro
+sudo pacman -S --needed base-devel rust gtk4 libadwaita                 # Arch
+sudo dnf install gcc rust cargo gtk4-devel libadwaita-devel             # Fedora
+sudo apt install build-essential cargo libgtk-4-dev libadwaita-1-dev    # Debian/Ubuntu
+sudo zypper install gcc cargo gtk4-devel libadwaita-devel               # openSUSE
+
+./install.sh    # builds and installs tankmini, tankmini-gui and a menu entry in ~/.local
+```
+
+Try it without installing:
+
+```sh
+cargo run --release -p tankmini-gui
+```
+
+Useful environment variables: `TANKMINI_DEMO=0` runs with no pedal attached (factory
+table, preset 1A loaded), `TANKMINI_INSTANCE=dev` allows a second, independent window.
+
+## Command line
+
+The GUI and the CLI share one core crate, so anything the app does can be scripted.
+`tankmini --help` lists everything; a few examples:
+
+```sh
+tankmini devices                  # list USB-MIDI devices and identify the pedal
+tankmini show                     # decode the current preset block by block
+tankmini slot 4                   # switch the pedal to preset 5
+tankmini patch 3 --param 2=80     # edit one parameter of slot 4
+tankmini save                     # commit the working table to flash
+tankmini export 3 solo.tankmini   # export a single preset
+tankmini import 12 solo.tankmini  # import into slot 13 (backup + verify)
+tankmini copy 3 9                 # duplicate a preset
+tankmini name 3 "Crunch música X" # local name for a preset
+tankmini bypass on                # global bypass
+tankmini library add "Solo do show"
+tankmini raw read 4 0x10000000 92 # raw protocol access
+```
+
+`--json` makes `show`, `patch`, `backups`, `names`, `library` and `templates`
+machine-readable.
+
+## How it works
+
+The pedal speaks a SysEx-like framing over USB-MIDI:
+
+```
+f0  <7-bit packed: 00 59 <cmd> <len u24 LE> <body> <checksum>>  f7
+checksum = (~sum(body)) & 0xff
+```
+
+A preset is 1942 bytes: 21 records of 92 bytes (bank/ABC, on/off per block, model per
+block, six 16-bit parameters per block) plus a `PATCHEND` trailer. Blocks are written
+in 173-byte chunks with an ACK per chunk and a full read-back afterwards;
+`WRITE 0xF0000000` with an empty body commits RAM to flash. Live edits go through a
+separate edit buffer (`0x10000000`), which is why turning a knob never touches flash.
+
+The full map — edit buffer, global/bypass byte, amp and cab name tables, the IR upload
+path we have not tried, and which findings are `verified` on hardware versus recovered
+`from app` — lives in [`docs/protocol/`](docs/protocol):
+
+- [`tank-mini-usb-sysex.md`](docs/protocol/tank-mini-usb-sysex.md) — framing, commands, addresses
+- [`preset-map.md`](docs/protocol/preset-map.md) — every byte of the 92-byte record
+- [`app-findings.md`](docs/protocol/app-findings.md) — the official app's memory map
+
+## Safety
+
+This tool writes to the pedal's flash. It does so carefully — backup before every
+write, read-back verification, no blind addressing — but it is unofficial and comes
+with no warranty. Two rules the project follows strictly:
+
+- The `ERASE` command (`0x21`) is never sent. It exists in the app, it is not needed,
+  and there is no known recovery path.
+- Nothing is written outside the known preset window (`type 4`, `0x0000`–`0x0795`)
+  until that address has been read at least once.
+
+Firmware updates are deliberately out of scope.
 
 ## Status
 
-| Area | State |
-|---|---|
-| USB-MIDI transport (SysEx framing, checksum) | verified on device |
-| Identity / version query | verified (`TANK MINI_004`) |
-| Read the preset block (1942 B) | verified |
-| Active slot query + slot select | verified |
-| Cab name table (t5 `0x80000000`) and amp name table (t5 `0x90000000`) | verified |
-| Edit buffer (t4 `0x10000000`): live edit, field writes | verified (read, write, stored table untouched) |
-| Global bypass (t4 `0x20000002`) | verified |
-| Amp/IR upload | described from the app (`docs/protocol/app-findings.md`), not tried |
-| Block write (173-byte chunks, ACK, read-back verify) | verified (RAM only) |
-| Save to flash (`WRITE 0xF0000000`, empty body) | verified across a power cycle; `tankmini save` + GUI |
-| Preset table structure (21 × 92 B, chain, 36 params) | verified, see `docs/protocol/preset-map.md` |
-| Module roles, effect variants, parameter names | recovered from the app; see `docs/protocol/preset-map.md` |
-| Local preset names (sidecar `names.tsv`) | working; editable in the GUI and via `tankmini name` |
-| Export / import a single preset (`.tankmini`, 92 B) | working in GUI and CLI, with backup + commit |
-| Copy a preset to another slot | working (`tankmini copy`, GUI menu) |
-| Factory reset (embedded factory table) | working (`tankmini factory`, GUI menu, with confirmation) |
-| CLI (`tankmini`) | devices, identify, dump, show, patch, slot, apply, restore, backups, names, save, name, export, import, copy, factory, bypass, library, templates, raw; `--json` |
-| GTK4 + libadwaita app (`tankmini-gui`) | see below |
+Verified on hardware: transport, identity, preset read/write/save, slot switching,
+live edit buffer, bypass, backups, export/import, copy, factory reset, CLI.
 
-## The app
+Not done yet: cabinet/IR upload (20 slots, `AM2` format — the address is known from the
+app but has never been tried), amp capture import, remote tuner, Bluetooth. The
+protocol docs mark exactly which claims have evidence and which do not.
 
-Spec: `docs/specs/0002-beginner-and-pro.md`.
+## Development
 
-- **Tocar** (beginners): the playing preset, four big knobs (Volume, Drive,
-  Brilho, Ambiente), quick on/off per effect, "Sons prontos" per instrument
-  (guitarra, violão, baixo), first-run assistant, pedal guide.
-- **Editar** (advanced): the blocks drawn as a pedalboard of stompboxes
-  (LED, footswitch, click the logo to swap the model), drag-and-drop signal chain, every block with all
-  parameters (real units for cab cuts), copy/paste a block, per-preset VOL,
-  bytes panel with unsaved bytes highlighted.
-- **Live edit**: changes play immediately through the pedal's edit buffer;
-  "Salvar na pedaleira" backs up, writes, verifies and commits.
-- Undo/redo, A/B against the saved version, global bypass, unlimited local
-  library with tags and favourites, setlists written to consecutive slots,
-  backup browser, hot-plug and footswitch follow, permission diagnosis,
-  dark/light/system theme, preferences, keyboard shortcuts (Ctrl+?).
-
-```bash
-./install.sh                                       # ~/.local/bin + menu entry
-cargo run --release -p tankmini-gui
-TANKMINI_INSTANCE=dev cargo run -p tankmini-gui   # second, independent instance
-TANKMINI_DEMO=0 cargo run -p tankmini-gui         # no USB: factory table, 1A playing
-cargo run -p tankmini-core --example live_probe   # hardware check of live edit
+```sh
+cargo test --workspace     # core protocol tests, no hardware required
+cargo build --release
+cargo run -p tankmini-core --example live_probe   # hardware check of live editing
 ```
-
-## Hardware
-
-- Pedal: M-VAVE TANK MINI, USB `4c4a:c755` (JieLi), serial `1120041A00030918`
-- Presents as a USB audio interface (44.1 kHz) **and** a USB-MIDI device
-- On this machine: ALSA card 2 → `/dev/snd/midiC2D0`
-
-## Layout
 
 ```
 docs/protocol/   protocol notes, one file per topic (evidence-marked)
 docs/specs/      specs, written before implementation
-assets/          factory-table.bin (byte-exact factory dump of this firmware)
+assets/          factory-table.bin, byte-exact dump of the stock presets
 tools/           probing / capture tooling (Python, stdlib only)
 captures/        raw dumps and extracted app assets (git-ignored)
 ```
 
-## Tools
-
-```bash
-# identity
-python3 tools/mvprobe.py query 11
-
-# read the active preset (1942 bytes, ends with "PATCHEND")
-python3 tools/mvprobe.py read 4 0 1942
-
-# dump a larger region to a file
-python3 tools/mvprobe.py dump 4 0 262144 -o captures/type4.bin
-```
+Contribution rules (evidence tags, spec-first changes, the two write-safety rules) are
+in [`AGENTS.md`](AGENTS.md).
 
 ## Reference material
 
 Prior art for the same M-VAVE protocol family (different devices, same framing):
 
-- `marco-jardim/mvave-irbox-tools` — frame format, 8→7 packing, checksum, region map
-- `pferreir/cuvave-midi` — Cube Baby memory map
-- `Pinudo/cubebaby-tools`, `aroum/fm1-custom-fw`
-
-Local copies live in `../_tools/ref/` (not part of this repo).
-REA (`../_tools/rea`, `rea` CLI) is used for the static analysis of the app.
+- [`marco-jardim/mvave-irbox-tools`](https://github.com/marco-jardim/mvave-irbox-tools) — frame format, 8→7 packing, checksum, region map
+- [`pferreir/cuvave-midi`](https://github.com/pferreir/cuvave-midi) — Cube Baby memory map
+- [`Pinudo/cubebaby-tools`](https://github.com/Pinudo/cubebaby-tools), [`aroum/fm1-custom-fw`](https://github.com/aroum/fm1-custom-fw)
 
 ## Legal
 
-Reverse engineering is limited to interoperability with hardware we own: the pedal
-on this desk and the official app binaries. No firmware redistribution, no
-cracked tools.
+Reverse engineering here is limited to interoperability with hardware we own: the pedal
+on this desk and the official app binaries. No firmware is redistributed, no cracked
+tools are used, and the project is not affiliated with M-VAVE. "TANK MINI" is a
+trademark of its owner; this project only claims interoperability.
+
+## License
+
+MIT — see [`LICENSE`](LICENSE).

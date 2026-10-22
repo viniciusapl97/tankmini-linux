@@ -212,7 +212,7 @@ fn sounds(app: &AppRef) -> gtk::Box {
     let spacer = hbox(0);
     spacer.set_hexpand(true);
     head.append(&spacer);
-    let group = adw::ToggleGroup::new();
+    let group = crate::toggle::ToggleGroup::new();
     group.add_css_class("tm-modes");
     group.add_css_class("round");
     let current = {
@@ -220,13 +220,13 @@ fn sounds(app: &AppRef) -> gtk::Box {
         Instrument::from_key(&st.settings.instrument).unwrap_or(Instrument::Guitar)
     };
     for inst in Instrument::ALL {
-        let t = adw::Toggle::new();
+        let t = crate::toggle::Toggle::new();
         t.set_name(Some(inst.key()));
         t.set_label(Some(inst.label()));
         group.add(t);
     }
     group.set_active_name(Some(current.key()));
-    head.append(&group);
+    head.append(&group.root);
     wrap.append(&head);
     let hint = label(
         "Um ponto de partida feito a partir dos presets de fábrica. Ele entra no preset selecionado e toca na hora; salve se gostar.",

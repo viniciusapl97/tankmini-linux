@@ -717,7 +717,16 @@ pub fn guide(app: &AppRef) {
 }
 
 pub fn shortcuts(app: &AppRef) {
-    let dialog = adw::ShortcutsDialog::new();
+    // Built from plain rows instead of AdwShortcutsDialog: that widget only exists
+    // in libadwaita 1.8, and this keeps the app on 1.5+ (Ubuntu 24.04, Fedora 40,
+    // Debian 13 and newer).
+    let dialog = adw::Dialog::new();
+    dialog.set_title("Atalhos");
+    dialog.set_content_width(560);
+    dialog.set_content_height(640);
+    let tv = adw::ToolbarView::new();
+    tv.add_top_bar(&adw::HeaderBar::new());
+    let page = adw::PreferencesPage::new();
     for (title, items) in [
         (
             "Sons",
@@ -752,13 +761,63 @@ pub fn shortcuts(app: &AppRef) {
             ],
         ),
     ] {
-        let section = adw::ShortcutsSection::new(Some(title));
+        let group = adw::PreferencesGroup::new();
+        group.set_title(title);
         for (t, accel) in items {
-            section.add(adw::ShortcutsItem::new(t, accel));
+            let row = adw::ActionRow::new();
+            row.set_title(t);
+            let keys = gtk::Label::new(Some(&pretty_accel(accel)));
+            keys.add_css_class("dim-label");
+            keys.add_css_class("monospace");
+            row.add_suffix(&keys);
+            group.add(&row);
         }
-        dialog.add(section);
+        page.add(&group);
     }
+    let scroll = gtk::ScrolledWindow::builder()
+        .child(&page)
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vexpand(true)
+        .build();
+    tv.set_content(Some(&scroll));
+    dialog.set_child(Some(&tv));
     dialog.present(Some(&app.window));
+}
+
+/// `<Control><Shift>s` -> `Ctrl+Shift+S`, arrows as glyphs, alternatives with `/`.
+fn pretty_accel(accel: &str) -> String {
+    accel
+        .split_whitespace()
+        .map(|one| {
+            let mut out = one
+                .replace("<Control>", "Ctrl+")
+                .replace("<Shift>", "Shift+")
+                .replace("<Alt>", "Alt+")
+                .replace("<Super>", "Super+");
+            for (from, to) in [
+                ("Left", "\u{2190}"),
+                ("Right", "\u{2192}"),
+                ("Up", "\u{2191}"),
+                ("Down", "\u{2193}"),
+                ("Page_Up", "PgUp"),
+                ("Page_Down", "PgDn"),
+                ("comma", ","),
+                ("question", "?"),
+                ("Home", "Home"),
+                ("End", "End"),
+            ] {
+                if out.ends_with(from) && from.chars().next().is_some_and(|c| c.is_uppercase()) {
+                    out.truncate(out.len() - from.len());
+                    out.push_str(to);
+                }
+            }
+            if out.len() == 1 {
+                out = out.to_uppercase();
+            }
+            out
+        })
+        .collect::<Vec<_>>()
+        .join(" / ")
 }
 
 pub fn preferences(app: &AppRef) {
