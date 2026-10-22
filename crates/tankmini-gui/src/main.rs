@@ -1,59 +1,132 @@
-//! GTK4 desktop app for the M-VAVE TANK MINI.
+//! TANK MINI — GTK4 control app for the M-VAVE guitar pedal.
 //!
-//! Two audiences, one window:
-//! - a beginner gets a guided start ("connect the pedal, pick a preset, play"),
-//!   real effect names and plain sliders;
-//! - an advanced user gets every module, every effect variant, every parameter
-//!   and a raw-byte view with the address of each control.
+//! Visual language: a warm dark "pedalboard" surface, one accent colour per
+//! effect family, knobs instead of anonymous sliders, and a stylised pedal drawn
+//! in the header so the first glance already says "this is a guitar pedal app".
 //!
-//! Layout: left rail = the 21 presets, centre = the six effect blocks of the
-//! selected preset in signal order, bottom = write/backup actions.
+//! Structure: welcome → preset rail (bank grouped) → six effect cards with named
+//! knobs → fixed action bar. Raw bytes live in the "Avançado" tab.
+
+mod knob;
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
 use gtk::prelude::*;
-use gtk::{glib, Application, ApplicationWindow, Box as GtkBox, Orientation};
+use gtk::{gdk, glib, Application, ApplicationWindow, Box as GtkBox, Orientation};
 use tankmini_core::backup::BackupStore;
 use tankmini_core::catalog::{self, Role};
 use tankmini_core::discovery::find_pedal;
 use tankmini_core::patch::{Patch, PresetTable, PATCH_COUNT, SLOT_LABELS};
 use tankmini_core::Pedal;
 
+use knob::{palette, Knob};
+
 const APP_ID: &str = "dev.v1ni.TankMini";
 const MODULE_COUNT: usize = 6;
 const PARAMS_PER_MODULE: usize = 6;
 
-const WELCOME: &str = r#"<span size="xx-large" weight="bold">TANK MINI</span>
+const CSS: &str = r#"
+window {
+  background: linear-gradient(160deg, #17130f 0%, #100d0b 55%, #0b0908 100%);
+}
+headerbar {
+  background: transparent;
+  box-shadow: none;
+  border: none;
+  min-height: 46px;
+}
+.hero {
+  background: linear-gradient(120deg, rgba(245,158,11,0.16), rgba(167,139,250,0.10) 45%, rgba(45,212,191,0.10));
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 22px;
+  padding: 16px 20px;
+}
+.app-title { font-size: 22px; font-weight: 800; letter-spacing: 0.4px; }
+.app-sub { font-size: 12px; color: rgba(236,229,222,0.62); }
+.pill {
+  background: rgba(255,255,255,0.07);
+  border-radius: 999px;
+  padding: 3px 11px;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.pill-active { background: rgba(52,211,153,0.18); color: #6ee7b7; }
+.card {
+  background: rgba(255,255,255,0.035);
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 20px;
+  transition: background 160ms ease, border-color 160ms ease;
+}
+.card:hover {
+  background: rgba(255,255,255,0.055);
+  border-color: rgba(255,255,255,0.13);
+}
+.card-off { opacity: 0.55; }
+.family-strip {
+  border-radius: 20px 20px 0 0;
+  min-height: 4px;
+  background: rgba(255,255,255,0.10);
+}
+.effect-name { font-size: 16px; font-weight: 700; }
+.effect-role { font-size: 11px; color: rgba(236,229,222,0.55); }
+.preset-row { border-radius: 12px; padding: 4px 6px; }
+.preset-row:selected { background: rgba(245,158,11,0.18); }
+.bank-label { font-size: 10.5px; letter-spacing: 1.2px; color: rgba(236,229,222,0.45); }
+.primary {
+  background-image: linear-gradient(120deg, #f59e0b, #f97316);
+  color: #1a1208;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 6px 20px;
+}
+.primary:disabled { background-image: none; background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.35); }
+.ghost { background: rgba(255,255,255,0.05); border-radius: 999px; padding: 5px 14px; }
+.chain-chip { border-radius: 999px; padding: 4px 12px; font-size: 11.5px; font-weight: 700;
+  background: rgba(255,255,255,0.07); }
+.strip-fx { background: #34d399; }
+.strip-amp { background: #f59e0b; }
+.strip-mod { background: #a78bfa; }
+.strip-dly { background: #60a5fa; }
+.strip-rvb { background: #2dd4bf; }
+.strip-cab { background: #fb7185; }
+"#;
 
-<span size="large">Controle sua pedaleira pelo computador, sem o app do celular.</span>
+const WELCOME: &str = r#"<span size="xx-large" weight="bold">Sua pedaleira, na tela.</span>
 
-<b>1.</b> Conecte a pedaleira no USB  (<i>já conectada se o ponto ao lado estiver verde</i>)
-<b>2.</b> Escolha um dos 21 presets na lista da esquerda
-<b>3.</b> Ajuste os efeitos à vontade e clique em <b>Salvar na pedaleira</b>
-<b>4.</b> Toque. O que você mexeu fica no som até você trocar de preset.
+<span size="large">Controle o TANK MINI pelo computador: escolha um som, gire os botões
+e o timbre muda na hora — sem app de celular.</span>
 
-Tudo o que você altera é guardado antes em um backup local, e a gravação é
-conferida lendo os bytes de volta da pedaleira."#;
+<b>1.</b> Conecte a pedaleira no USB
+<b>2.</b> Escolha um dos 21 sons (7 bancos × A/B/C)
+<b>3.</b> Gire os botões de cada efeito
+<b>4.</b> Clique em <b>Salvar na pedaleira</b> e toque
 
-const ABOUT_MAP: &str = r#"<b>Como o app conversa com a pedaleira</b>
+Antes de gravar, o app guarda um backup e confere lendo os bytes de volta."#;
 
-Tudo foi descoberto por engenharia reversa do protocolo USB-MIDI e do app oficial.
+const ABOUT: &str = r#"<b>O que é cada bloco</b>
 
-• 21 presets de 92 bytes numa tabela (1942 bytes) — cada preset tem a ordem dos
-  6 blocos, o tipo de cada bloco e 36 parâmetros de 0 a 100.
-• Cada bloco: ligado/desligado em <tt>0x08+i</tt>, tipo em <tt>0x0e+i</tt>,
-  parâmetros em <tt>0x14 + i*12 + p*2</tt>.
-• Tipos: dinâmica (gate/boost/comp), amp (20 modelos), modulação (7), delay (5),
-  reverb (6), cabinet (20 IRs — os nomes vêm da própria pedaleira).
+A pedaleira tem 6 blocos em série, e você pode mudar a ordem deles. Cada bloco
+tem um tipo e até 6 botões de 0 a 100:
 
-<b>O que ainda não está fechado</b>
+• <b>Dinâmica</b> — portão de ruído, boost ou compressor
+• <b>Amp</b> — modelo de pré-amplificador (20 modelos, nomes vindos da pedaleira)
+• <b>Modulação</b> — chorus, phaser, tremolo, flanger, vibrato, univibe, autofiltro
+• <b>Delay</b> — analog, duck, dual, lofi
+• <b>Reverb</b> — room, hall, swell, spring, shimmer, cloud
+• <b>Cabinet</b> — caixa simulada (IR), 20 opções
 
-• O comando que salva na memória permanente (desligar a pedaleira ainda volta ao
-  preset antigo). Use Backup para não perder ajustes.
-• Os nomes de alguns parâmetros de dinâmica e cabinet, e a ordem fina dos
-  parâmetros de amp — a estrutura está certa, os rótulos são inferidos."#;
+<b>Como isso funciona por dentro</b>
+
+Tudo foi obtido por engenharia reversa do protocolo USB-MIDI e do app oficial:
+cada preset tem 92 bytes — ordem dos blocos, tipo de cada bloco e 36 parâmetros.
+
+<b>Ainda não fecha</b>
+
+• Salvar na memória permanente da pedaleira (o comando de flash ainda não foi
+  identificado): use Backup para guardar seus ajustes.
+• Alguns nomes de parâmetros de dinâmica e cabinet são inferidos."#;
 
 struct State {
     table: Option<PresetTable>,
@@ -79,7 +152,7 @@ type Shared = Rc<RefCell<State>>;
 #[derive(Clone)]
 struct Ui {
     stack: gtk::Stack,
-    device_pill: gtk::Label,
+    status_pill: gtk::Label,
     preset_list: gtk::ListBox,
     preset_title: gtk::Label,
     preset_sub: gtk::Label,
@@ -158,20 +231,63 @@ fn hexdump(data: &[u8]) -> String {
     out
 }
 
-fn badge(role: Role) -> gtk::Label {
-    let letter = match role {
-        Role::Fx => "FX",
-        Role::Amp => "AMP",
-        Role::Modulation => "MOD",
-        Role::Delay => "DLY",
-        Role::Reverb => "RVB",
-        Role::Cabinet => "CAB",
-    };
-    let label = gtk::Label::new(Some(letter));
-    label.add_css_class("caption");
-    label.add_css_class("dim-label");
-    label.set_width_chars(4);
-    label
+/// A small stylised pedal: body, two knobs, three footswitches and a LED.
+fn pedal_art(size: i32, accent: &str) -> gtk::DrawingArea {
+    let area = gtk::DrawingArea::new();
+    area.set_content_width(size);
+    area.set_content_height(size * 9 / 10);
+    let accent = knob::rgba(accent);
+    area.set_draw_func(move |_, cr, w, h| {
+        let (w, h) = (w as f64, h as f64);
+        let pad = 3.0;
+        // Body.
+        let x = pad;
+        let y = pad;
+        let width = w - pad * 2.0;
+        let height = h - pad * 2.0;
+        let r = width * 0.16;
+        rounded_rect(cr, x, y, width, height, r);
+        cr.set_source_rgba(0.10, 0.08, 0.07, 1.0);
+        let _ = cr.fill_preserve();
+        cr.set_source_rgba(accent.red() as f64, accent.green() as f64, accent.blue() as f64, 0.55);
+        cr.set_line_width(1.6);
+        let _ = cr.stroke();
+
+        // Knobs.
+        cr.set_source_rgba(accent.red() as f64, accent.green() as f64, accent.blue() as f64, 0.95);
+        for (i, kx) in [x + width * 0.30, x + width * 0.70].iter().enumerate() {
+            cr.arc(*kx, y + height * 0.30, width * 0.11, 0.0, 2.0 * std::f64::consts::PI);
+            let _ = cr.fill();
+            cr.set_source_rgba(0.08, 0.07, 0.06, 1.0);
+            cr.arc(*kx, y + height * 0.30, width * 0.055, 0.0, 2.0 * std::f64::consts::PI);
+            let _ = cr.fill();
+            cr.set_source_rgba(accent.red() as f64, accent.green() as f64, accent.blue() as f64, 0.95);
+            let _ = i;
+        }
+
+        // Footswitches.
+        for i in 0..3 {
+            let cx = x + width * (0.24 + 0.26 * i as f64);
+            let cy = y + height * 0.72;
+            cr.set_source_rgba(0.86, 0.84, 0.80, 0.92);
+            cr.arc(cx, cy, width * 0.075, 0.0, 2.0 * std::f64::consts::PI);
+            let _ = cr.fill();
+            cr.set_source_rgba(0.18, 0.16, 0.15, 1.0);
+            cr.arc(cx, cy, width * 0.045, 0.0, 2.0 * std::f64::consts::PI);
+            let _ = cr.fill();
+        }
+    });
+    area
+}
+
+fn rounded_rect(cr: &gtk::cairo::Context, x: f64, y: f64, w: f64, h: f64, r: f64) {
+    use std::f64::consts::PI;
+    cr.new_sub_path();
+    cr.arc(x + w - r, y + r, r, -PI / 2.0, 0.0);
+    cr.arc(x + w - r, y + h - r, r, 0.0, PI / 2.0);
+    cr.arc(x + r, y + h - r, r, PI / 2.0, PI);
+    cr.arc(x + r, y + r, r, PI, 1.5 * PI);
+    cr.close_path();
 }
 
 fn refresh(ui: &Ui, state: &Shared, suppress: &Rc<Cell<bool>>) {
@@ -179,21 +295,21 @@ fn refresh(ui: &Ui, state: &Shared, suppress: &Rc<Cell<bool>>) {
     {
         let st = state.borrow();
         let connected = st.table.is_some();
-        ui.stack.set_visible_child_name(if connected { "editor" } else { "welcome" });
-        ui.device_pill.set_text(&if connected {
+        ui.stack
+            .set_visible_child_name(if connected { "editor" } else { "welcome" });
+        ui.status_pill.set_text(&if connected {
             format!(
-                "{} conectada · preset {}",
+                "{} · preset {}",
                 st.firmware,
                 st.active_slot
                     .map(|s| SLOT_LABELS.get(s as usize).copied().unwrap_or("?"))
                     .unwrap_or("?")
             )
         } else {
-            "pedaleira desconectada".to_string()
+            "desconectada".to_string()
         });
-        ui.device_pill.set_tooltip_text(Some(&st.node));
+        ui.status_pill.set_tooltip_text(Some(&st.node));
 
-        // Preset rail.
         while let Some(row) = ui.preset_list.row_at_index(0) {
             ui.preset_list.remove(&row);
         }
@@ -205,25 +321,26 @@ fn refresh(ui: &Ui, state: &Shared, suppress: &Rc<Cell<bool>>) {
                     let header = gtk::ListBoxRow::new();
                     header.set_selectable(false);
                     header.set_activatable(false);
-                    let label = gtk::Label::new(Some(&format!("Banco {}", i / 3 + 1)));
+                    let label = gtk::Label::new(Some(&format!("BANCO {}", i / 3 + 1)));
                     label.set_xalign(0.0);
-                    label.add_css_class("caption");
-                    label.add_css_class("dim-label");
-                    label.set_margin_top(6);
-                    label.set_margin_start(4);
+                    label.add_css_class("bank-label");
+                    label.set_margin_top(8);
+                    label.set_margin_start(6);
                     header.set_child(Some(&label));
                     ui.preset_list.append(&header);
                 }
                 let row = gtk::ListBoxRow::new();
-                if active {
-                    row.add_css_class("accent");
-                }
+                row.add_css_class("preset-row");
                 let line = GtkBox::new(Orientation::Vertical, 0);
                 let title = gtk::Label::new(None);
                 title.set_markup(&format!(
                     "<b>{}</b>{}",
                     patch.label(),
-                    if active { "   <small>em uso</small>" } else { "" }
+                    if active {
+                        "  <span foreground='#6ee7b7' size='small'>● tocando</span>"
+                    } else {
+                        ""
+                    }
                 ));
                 title.set_xalign(0.0);
                 let chain: Vec<String> = patch
@@ -241,11 +358,10 @@ fn refresh(ui: &Ui, state: &Shared, suppress: &Rc<Cell<bool>>) {
                         .to_string()
                     })
                     .collect();
-                let sub = gtk::Label::new(Some(&chain.join(" › ")));
+                let sub = gtk::Label::new(Some(&chain.join(" · ")));
                 sub.add_css_class("caption");
                 sub.add_css_class("dim-label");
                 sub.set_xalign(0.0);
-                sub.set_ellipsize(gtk::pango::EllipsizeMode::End);
                 line.append(&title);
                 line.append(&sub);
                 row.set_child(Some(&line));
@@ -256,27 +372,23 @@ fn refresh(ui: &Ui, state: &Shared, suppress: &Rc<Cell<bool>>) {
             }
         }
 
-        // Selected preset header.
         if let Some(table) = &st.table {
             if let Some(patch) = table.patch(st.selected) {
                 let active = st.active_slot.map(|s| s as usize) == Some(st.selected);
-                ui.preset_title
-                    .set_markup(&format!("<span size='x-large' weight='bold'>{}</span>", patch.label()));
+                ui.preset_title.set_markup(&format!(
+                    "<span size='xx-large' weight='bold'>{}</span>",
+                    patch.label()
+                ));
                 ui.preset_sub.set_text(if active {
-                    "Este é o preset que está tocando agora."
+                    "Tocando agora na pedaleira"
                 } else {
-                    "Toque em “Tocar na pedaleira” para ouvir este preset."
+                    "Selecione para ver os detalhes e toque para ouvir"
                 });
                 ui.play.set_sensitive(!active);
-                ui.play.set_label(if active {
-                    "Tocando agora"
-                } else {
-                    "Tocar na pedaleira"
-                });
+                ui.play.set_label(if active { "Tocando agora" } else { "Tocar na pedaleira" });
             }
         }
 
-        // Chain chips + module cards.
         while let Some(child) = ui.chain_box.first_child() {
             ui.chain_box.remove(&child);
         }
@@ -289,12 +401,18 @@ fn refresh(ui: &Ui, state: &Shared, suppress: &Rc<Cell<bool>>) {
                 let chain = patch.chain();
                 for (pos, module) in chain.iter().enumerate() {
                     let role = Role::for_slot(*module as usize);
-                    let chip = gtk::Label::new(Some(&format!(
-                        "{} {}",
+                    let chip = gtk::Label::new(None);
+                    chip.set_margin_end(2);
+                    chip.set_markup(&format!(
+                        "<span foreground='{}'>●</span>  <b>{}</b>  {}",
+                        palette::for_role(role),
                         pos + 1,
-                        role.label()
-                    )));
-                    chip.add_css_class("pill");
+                        gtk::glib::markup_escape_text(&patch.effect_name(*module as usize, &st.names))
+                    ));
+                    chip.add_css_class("chain-chip");
+                    chip.set_tooltip_text(Some(role.hint()));
+                    let ctx = chip.style_context();
+                    ctx.add_provider(&css_provider(), gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
                     ui.chain_box.append(&chip);
                     if pos + 1 < MODULE_COUNT {
                         let arrow = gtk::Label::new(Some("›"));
@@ -329,32 +447,48 @@ fn module_card(
     let role = Role::for_slot(module);
     let unit = patch.unit(module);
     let on = patch.is_on(module);
+    let accent = palette::for_role(role);
 
     let frame = gtk::Frame::new(None);
     frame.add_css_class("card");
+    if !on {
+        frame.add_css_class("card-off");
+    }
 
-    let outer = GtkBox::new(Orientation::Vertical, 10);
-    outer.set_margin_top(14);
-    outer.set_margin_bottom(14);
-    outer.set_margin_start(16);
-    outer.set_margin_end(16);
+    let outer = GtkBox::new(Orientation::Vertical, 0);
 
-    // Header: position, role, effect name, on/off.
+    // Coloured strip at the top of the card.
+    let strip = GtkBox::new(Orientation::Horizontal, 0);
+    strip.add_css_class("family-strip");
+    strip.set_size_request(-1, 4);
+    strip.set_widget_name("family-strip");
+    let provider = css_provider();
+    strip.style_context().add_provider(&provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
+    let ctx = strip.style_context();
+    ctx.add_class(&format!("strip-{}", role_class(role)));
+    outer.append(&strip);
+
+    let body = GtkBox::new(Orientation::Vertical, 10);
+    body.set_margin_top(12);
+    body.set_margin_bottom(16);
+    body.set_margin_start(16);
+    body.set_margin_end(16);
+
     let head = GtkBox::new(Orientation::Horizontal, 10);
-    let badge = badge(role);
-    let titles = GtkBox::new(Orientation::Vertical, 0);
+    let titles = GtkBox::new(Orientation::Vertical, 2);
     let effect_name = patch.effect_name(module, names);
     let title = gtk::Label::new(None);
-    title.set_markup(&format!("<b>{}</b>", gtk::glib::markup_escape_text(&effect_name)));
+    title.set_markup(&format!(
+        "<span size='large' weight='bold' foreground='{accent}'>{}</span>",
+        gtk::glib::markup_escape_text(&effect_name)
+    ));
     title.set_xalign(0.0);
     let subtitle = gtk::Label::new(Some(&format!(
-        "Bloco {} de 6 · {} · {}",
-        position + 1,
+        "{} · bloco {} de 6",
         role.label(),
-        role.hint()
+        position + 1
     )));
-    subtitle.add_css_class("caption");
-    subtitle.add_css_class("dim-label");
+    subtitle.add_css_class("effect-role");
     subtitle.set_xalign(0.0);
     titles.append(&title);
     titles.append(&subtitle);
@@ -363,11 +497,11 @@ fn module_card(
     let enabled = gtk::Switch::new();
     enabled.set_active(on);
     enabled.set_valign(gtk::Align::Center);
-    enabled.set_tooltip_text(Some("Liga ou desliga este efeito no preset"));
+    enabled.set_tooltip_text(Some("Ligar/desligar este bloco"));
     {
         let state = state.clone();
         let suppress = suppress.clone();
-        let ui_sink = ui_sink();
+        let ui_sink = UiSink;
         enabled.connect_state_set(move |_, value| {
             if !suppress.get() {
                 if let Some(t) = state.borrow_mut().table.as_mut() {
@@ -378,11 +512,10 @@ fn module_card(
             glib::Propagation::Proceed
         });
     }
-    head.append(&badge);
     head.append(&titles);
     head.append(&spacer);
     head.append(&enabled);
-    outer.append(&head);
+    body.append(&head);
 
     // Variant selector.
     let labels: Vec<String> = match role {
@@ -400,18 +533,6 @@ fn module_card(
             .collect(),
     };
     if labels.len() > 1 {
-        let row = GtkBox::new(Orientation::Horizontal, 8);
-        let caption = gtk::Label::new(Some(match role {
-            Role::Amp => "Modelo de amp",
-            Role::Cabinet => "Caixa (IR)",
-            Role::Modulation => "Tipo de modulação",
-            Role::Delay => "Tipo de delay",
-            Role::Reverb => "Tipo de reverb",
-            Role::Fx => "Tipo de dinâmica",
-        }));
-        caption.add_css_class("dim-label");
-        caption.set_size_request(150, -1);
-        caption.set_xalign(0.0);
         let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
         let dropdown = gtk::DropDown::from_strings(&refs);
         dropdown.set_selected(unit.min(labels.len() as u8 - 1) as u32);
@@ -419,7 +540,7 @@ fn module_card(
         {
             let state = state.clone();
             let suppress = suppress.clone();
-            let ui_sink = ui_sink();
+            let ui_sink = UiSink;
             dropdown.connect_selected_notify(move |dd| {
                 if suppress.get() {
                     return;
@@ -430,99 +551,72 @@ fn module_card(
                 bump(&ui_sink, &state);
             });
         }
-        row.append(&caption);
-        row.append(&dropdown);
-        outer.append(&row);
+        body.append(&dropdown);
     }
 
-    // Parameters.
-    let grid = gtk::Grid::builder()
-        .row_spacing(6)
-        .column_spacing(12)
-        .margin_top(4)
-        .build();
+    // Knobs.
+    let knobs = gtk::FlowBox::new();
+    knobs.set_selection_mode(gtk::SelectionMode::None);
+    knobs.set_column_spacing(10);
+    knobs.set_row_spacing(6);
+    knobs.set_max_children_per_line(6);
+    knobs.set_homogeneous(false);
+    knobs.set_valign(gtk::Align::Start);
+    knobs.set_halign(gtk::Align::Start);
+    knobs.set_margin_top(4);
 
     let mut shown = 0usize;
     for param in 0..PARAMS_PER_MODULE {
         let value = patch.param(module, param).unwrap_or(0);
-        let name = catalog::param_name(role, unit, param)
-            .map(|raw| catalog::display_name(raw).to_string())
-            .unwrap_or_else(|| format!("Parâmetro {}", param + 1));
-        // Hide unused slots that are zero and unnamed, to reduce noise.
-        if catalog::param_name(role, unit, param).is_none() && value == 0 {
+        let raw_name = catalog::param_name(role, unit, param);
+        if raw_name.is_none() && value == 0 {
             continue;
         }
-        let label = gtk::Label::new(Some(&name));
-        label.set_xalign(0.0);
-        label.set_size_request(120, -1);
-        let scale = gtk::Scale::with_range(Orientation::Horizontal, 0.0, 100.0, 1.0);
-        scale.set_draw_value(false);
-        scale.set_hexpand(true);
-        scale.set_value(value as f64);
-        scale.set_tooltip_text(Some(&format!(
-            "{} · faixa 0–100 · offset 0x{:02x}",
-            name,
-            Patch::param_offset(module, param)
-        )));
-        let spin = gtk::SpinButton::with_range(0.0, 100.0, 1.0);
-        spin.set_value(value as f64);
-        spin.set_width_chars(4);
-        spin.set_numeric(true);
-        {
-            let spin_c = spin.clone();
-            let state = state.clone();
-            let suppress = suppress.clone();
-            let ui_sink = ui_sink();
-            scale.connect_value_changed(move |s| {
-                if suppress.get() {
-                    return;
-                }
-                let v = s.value().round() as u16;
-                spin_c.set_value(v as f64);
-                if let Some(t) = state.borrow_mut().table.as_mut() {
-                    t.set_param(patch_index, module, param, v);
-                }
-                bump(&ui_sink, &state);
-            });
-        }
-        {
-            let scale_c = scale.clone();
-            let state = state.clone();
-            let suppress = suppress.clone();
-            let ui_sink = ui_sink();
-            spin.connect_value_changed(move |s| {
-                if suppress.get() {
-                    return;
-                }
-                let v = s.value().round() as u16;
-                scale_c.set_value(v as f64);
-                if let Some(t) = state.borrow_mut().table.as_mut() {
-                    t.set_param(patch_index, module, param, v);
-                }
-                bump(&ui_sink, &state);
-            });
-        }
-        grid.attach(&label, 0, shown as i32, 1, 1);
-        grid.attach(&scale, 1, shown as i32, 1, 1);
-        grid.attach(&spin, 2, shown as i32, 1, 1);
+        let label = raw_name
+            .map(catalog::display_name)
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("Ajuste {}", param + 1));
+        let state_c = state.clone();
+        let suppress_c = suppress.clone();
+        let knob = Knob::new(&label, value as f64, 100.0, accent, move |v| {
+            if suppress_c.get() {
+                return;
+            }
+            if let Some(t) = state_c.borrow_mut().table.as_mut() {
+                t.set_param(patch_index, module, param, v);
+            }
+            bump(&UiSink, &state_c);
+        });
+        let holder = GtkBox::new(Orientation::Vertical, 0);
+        holder.set_halign(gtk::Align::Center);
+        holder.append(knob.widget());
+        knobs.insert(&holder, -1);
         shown += 1;
     }
     if shown > 0 {
-        if !on {
-            grid.set_opacity(0.55);
-        }
-        outer.append(&grid);
+        body.append(&knobs);
     }
 
+    outer.append(&body);
     frame.set_child(Some(&outer));
     frame
 }
 
-/// Cheap "dirty" indicator without a full refresh (avoids rebuilding widgets
-/// while a slider is being dragged).
+fn role_class(role: Role) -> &'static str {
+    match role {
+        Role::Fx => "fx",
+        Role::Amp => "amp",
+        Role::Modulation => "mod",
+        Role::Delay => "dly",
+        Role::Reverb => "rvb",
+        Role::Cabinet => "cab",
+    }
+}
+
 thread_local! {
     static DIRTY_LABEL: RefCell<Option<gtk::Label>> = const { RefCell::new(None) };
     static WRITE_BUTTON: RefCell<Option<gtk::Button>> = const { RefCell::new(None) };
+    static PROVIDER: RefCell<Option<gtk::CssProvider>> = const { RefCell::new(None) };
 }
 
 fn register_dirty_label(label: &gtk::Label) {
@@ -533,11 +627,19 @@ fn register_write_button(button: &gtk::Button) {
     WRITE_BUTTON.with(|b| *b.borrow_mut() = Some(button.clone()));
 }
 
-struct UiSink;
-
-fn ui_sink() -> UiSink {
-    UiSink
+fn css_provider() -> gtk::CssProvider {
+    PROVIDER.with(|p| {
+        if let Some(provider) = p.borrow().as_ref() {
+            return provider.clone();
+        }
+        let provider = gtk::CssProvider::new();
+        provider.load_from_data(CSS);
+        *p.borrow_mut() = Some(provider.clone());
+        provider
+    })
 }
+
+struct UiSink;
 
 fn bump(_sink: &UiSink, state: &Shared) {
     let dirty = state.borrow().dirty();
@@ -557,78 +659,93 @@ fn build_window(app: &Application) -> (ApplicationWindow, Ui, Shared) {
     let window = ApplicationWindow::builder()
         .application(app)
         .title("TANK MINI")
-        .default_width(1240)
-        .default_height(860)
+        .default_width(1180)
+        .default_height(820)
         .build();
 
     let header = gtk::HeaderBar::new();
+    header.add_css_class("flat");
+    let title = gtk::Label::new(Some("TANK MINI"));
+    title.add_css_class("app-title");
     let pill = gtk::Label::new(Some("conectando…"));
-    pill.add_css_class("caption");
-    pill.add_css_class("dim-label");
-    header.set_title_widget(Some(&pill));
-
-    let map = gtk::Button::with_label("Como funciona");
+    pill.add_css_class("pill");
+    header.set_title_widget(Some(&title));
+    let about = gtk::Button::with_label("Como funciona");
+    about.add_css_class("ghost");
     {
         let window_c = window.clone();
-        map.connect_clicked(move |_| {
+        about.connect_clicked(move |_| {
             let dialog = gtk::MessageDialog::builder()
                 .transient_for(&window_c)
                 .modal(true)
                 .message_type(gtk::MessageType::Info)
                 .buttons(gtk::ButtonsType::Close)
                 .build();
-            dialog.set_markup(ABOUT_MAP);
+            dialog.set_markup(ABOUT);
             dialog.present();
         });
     }
-    header.pack_end(&map);
+    header.pack_end(&pill);
+    header.pack_end(&about);
     window.set_titlebar(Some(&header));
+
+    let css = css_provider();
+    gtk::style_context_add_provider_for_display(
+        &gdk::Display::default().expect("display"),
+        &css,
+        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+    );
 
     let stack = gtk::Stack::new();
     stack.set_transition_type(gtk::StackTransitionType::Crossfade);
+    stack.set_transition_duration(220);
 
-    // --- welcome page -----------------------------------------------------
-    let welcome = GtkBox::new(Orientation::Vertical, 18);
+    // --- welcome ----------------------------------------------------------
+    let welcome = GtkBox::new(Orientation::Vertical, 16);
     welcome.set_valign(gtk::Align::Center);
     welcome.set_halign(gtk::Align::Center);
     welcome.set_margin_top(40);
     welcome.set_margin_bottom(40);
     welcome.set_margin_start(40);
     welcome.set_margin_end(40);
+
+    let art = pedal_art(150, "#f59e0b");
+    art.set_halign(gtk::Align::Center);
+    welcome.append(&art);
+
     let welcome_text = gtk::Label::new(None);
     welcome_text.set_markup(WELCOME);
     welcome_text.set_wrap(true);
-    welcome_text.set_max_width_chars(64);
-    welcome_text.set_xalign(0.0);
+    welcome_text.set_max_width_chars(62);
+    welcome_text.set_xalign(0.5);
+    welcome_text.set_justify(gtk::Justification::Center);
     let connect = gtk::Button::with_label("Detectar pedaleira");
-    connect.add_css_class("suggested-action");
-    connect.add_css_class("pill");
-    connect.set_halign(gtk::Align::Start);
+    connect.add_css_class("primary");
+    connect.set_halign(gtk::Align::Center);
     welcome.append(&welcome_text);
     welcome.append(&connect);
     stack.add_named(&welcome, Some("welcome"));
 
-    // --- editor page ------------------------------------------------------
+    // --- editor -----------------------------------------------------------
     let editor = GtkBox::new(Orientation::Vertical, 0);
-
     let paned = gtk::Paned::new(Orientation::Horizontal);
     paned.set_vexpand(true);
 
     let rail = GtkBox::new(Orientation::Vertical, 6);
-    rail.set_size_request(250, -1);
-    let rail_title = gtk::Label::new(Some("Meus presets"));
+    rail.set_size_request(232, -1);
+    rail.set_margin_start(10);
+    rail.set_margin_end(4);
+    let rail_title = gtk::Label::new(Some("Seus sons"));
     rail_title.set_xalign(0.0);
     rail_title.add_css_class("heading");
-    rail_title.set_margin_start(14);
-    rail_title.set_margin_top(10);
+    rail_title.set_margin_start(6);
+    rail_title.set_margin_top(8);
     rail.append(&rail_title);
-    let rail_hint = gtk::Label::new(Some("21 sons na pedaleira · 7 bancos × A/B/C"));
+    let rail_hint = gtk::Label::new(Some("21 presets na pedaleira"));
     rail_hint.set_xalign(0.0);
     rail_hint.add_css_class("caption");
     rail_hint.add_css_class("dim-label");
-    rail_hint.set_margin_start(14);
-    rail_hint.set_margin_end(8);
-    rail_hint.set_wrap(true);
+    rail_hint.set_margin_start(6);
     rail.append(&rail_hint);
     let preset_list = gtk::ListBox::new();
     preset_list.set_selection_mode(gtk::SelectionMode::Single);
@@ -639,55 +756,64 @@ fn build_window(app: &Application) -> (ApplicationWindow, Ui, Shared) {
         .build();
     rail.append(&list_scroll);
     let play = gtk::Button::with_label("Tocar na pedaleira");
-    play.set_margin_start(14);
-    play.set_margin_end(14);
-    play.set_margin_bottom(12);
+    play.add_css_class("ghost");
+    play.set_margin_start(6);
+    play.set_margin_end(6);
+    play.set_margin_bottom(10);
     rail.append(&play);
     paned.set_start_child(Some(&rail));
 
     let centre = GtkBox::new(Orientation::Vertical, 6);
-    centre.set_margin_top(10);
-    centre.set_margin_start(18);
-    centre.set_margin_end(18);
+    centre.set_margin_top(8);
+    centre.set_margin_start(16);
+    centre.set_margin_end(16);
 
+    let hero = GtkBox::new(Orientation::Horizontal, 14);
+    hero.add_css_class("hero");
+    hero.set_margin_bottom(8);
+    let hero_art = pedal_art(58, "#f59e0b");
+    let hero_text = GtkBox::new(Orientation::Vertical, 0);
     let preset_title = gtk::Label::new(None);
     preset_title.set_xalign(0.0);
     let preset_sub = gtk::Label::new(None);
+    preset_sub.add_css_class("app-sub");
     preset_sub.set_xalign(0.0);
-    preset_sub.add_css_class("dim-label");
-    preset_sub.add_css_class("caption");
-    centre.append(&preset_title);
-    centre.append(&preset_sub);
+    preset_sub.set_margin_top(3);
+    hero_text.append(&preset_title);
+    hero_text.append(&preset_sub);
+    hero.append(&hero_art);
+    hero.append(&hero_text);
+    centre.append(&hero);
 
-    let chain_box = GtkBox::new(Orientation::Horizontal, 4);
-    chain_box.set_margin_top(6);
+    let chain_box = GtkBox::new(Orientation::Horizontal, 6);
     centre.append(&chain_box);
 
-    let modules_box = GtkBox::new(Orientation::Vertical, 10);
-    modules_box.set_margin_bottom(24);
+    let modules_box = GtkBox::new(Orientation::Vertical, 12);
+    modules_box.set_margin_bottom(26);
     let modules_scroll = gtk::ScrolledWindow::builder()
         .vexpand(true)
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vscrollbar_policy(gtk::PolicyType::Automatic)
         .child(&modules_box)
         .build();
     centre.append(&modules_scroll);
 
-    // Advanced page inside the same stack area.
     let tabs = gtk::Stack::new();
     tabs.set_vexpand(true);
     tabs.set_transition_type(gtk::StackTransitionType::SlideLeftRight);
     tabs.add_titled(&centre, Some("simple"), "Efeitos");
 
     let advanced = GtkBox::new(Orientation::Vertical, 8);
-    advanced.set_margin_top(10);
-    advanced.set_margin_start(18);
-    advanced.set_margin_end(18);
+    advanced.set_margin_top(8);
+    advanced.set_margin_start(16);
+    advanced.set_margin_end(16);
     let note = gtk::Label::new(Some(
-        "Bytes crus do preset selecionado. Offsets: 0x02 cadeia · 0x08 ligado · 0x0e tipo · 0x14 parâmetros (u16 LE).",
+        "Bytes crus do preset. 0x02 ordem · 0x08 ligado · 0x0e tipo · 0x14 parâmetros (u16 LE).",
     ));
     note.set_xalign(0.0);
     note.set_wrap(true);
-    note.add_css_class("dim-label");
     note.add_css_class("caption");
+    note.add_css_class("dim-label");
     advanced.append(&note);
     let hex_view = gtk::TextView::new();
     hex_view.set_editable(false);
@@ -705,23 +831,25 @@ fn build_window(app: &Application) -> (ApplicationWindow, Ui, Shared) {
     bar.set_halign(gtk::Align::Start);
     bar.append(&switcher);
 
-    let centre_wrap = GtkBox::new(Orientation::Vertical, 0);
+    let centre_wrap = GtkBox::new(Orientation::Vertical, 6);
     centre_wrap.append(&bar);
     centre_wrap.append(&tabs);
     paned.set_end_child(Some(&centre_wrap));
     editor.append(&paned);
 
-    // Action bar.
     let actions = GtkBox::new(Orientation::Horizontal, 8);
-    actions.set_margin_top(10);
+    actions.set_margin_top(8);
     actions.set_margin_bottom(10);
-    actions.set_margin_start(18);
-    actions.set_margin_end(18);
+    actions.set_margin_start(16);
+    actions.set_margin_end(16);
     let reload = gtk::Button::with_label("Recarregar da pedaleira");
     let backup = gtk::Button::with_label("Criar backup");
     let restore = gtk::Button::with_label("Restaurar backup…");
     let write = gtk::Button::with_label("Salvar na pedaleira");
-    write.add_css_class("suggested-action");
+    write.add_css_class("primary");
+    for b in [&reload, &backup, &restore] {
+        b.add_css_class("ghost");
+    }
     let dirty = gtk::Label::new(None);
     dirty.add_css_class("caption");
     dirty.add_css_class("dim-label");
@@ -737,9 +865,9 @@ fn build_window(app: &Application) -> (ApplicationWindow, Ui, Shared) {
 
     let status = gtk::Label::new(Some("Pronto"));
     status.set_xalign(0.0);
-    status.set_margin_start(18);
-    status.set_margin_end(18);
-    status.set_margin_bottom(10);
+    status.set_margin_start(16);
+    status.set_margin_end(16);
+    status.set_margin_bottom(14);
     status.add_css_class("caption");
     status.add_css_class("dim-label");
     editor.append(&status);
@@ -752,7 +880,7 @@ fn build_window(app: &Application) -> (ApplicationWindow, Ui, Shared) {
 
     let ui = Ui {
         stack,
-        device_pill: pill,
+        status_pill: pill,
         preset_list,
         preset_title,
         preset_sub,
@@ -782,21 +910,18 @@ fn build_window(app: &Application) -> (ApplicationWindow, Ui, Shared) {
 }
 
 fn connect(ui: &Ui, state: &Shared, suppress: &Rc<Cell<bool>>) {
-    // First run: detect.
     {
         let ui_c = ui.clone();
         let state = state.clone();
         let suppress = suppress.clone();
         ui.clone().connect.connect_clicked(move |_| {
             match load_from_device(&state) {
-                Ok(()) => set_status(&ui_c, "Pedaleira conectada. Escolha um preset."),
+                Ok(()) => set_status(&ui_c, "Pedaleira conectada. Escolha um som."),
                 Err(e) => set_status(&ui_c, &e),
             }
             refresh(&ui_c, &state, &suppress);
         });
     }
-
-    // Preset selection.
     {
         let state = state.clone();
         let ui_c = ui.clone();
@@ -806,13 +931,22 @@ fn connect(ui: &Ui, state: &Shared, suppress: &Rc<Cell<bool>>) {
                 return;
             }
             if let Some(row) = row {
-                state.borrow_mut().selected = row.index() as usize;
+                let index = row.index() as usize;
+                // Skip the bank header rows (not selectable, but be safe).
+                if state
+                    .borrow()
+                    .table
+                    .as_ref()
+                    .and_then(|t| t.patch(index))
+                    .is_none()
+                {
+                    return;
+                }
+                state.borrow_mut().selected = index;
                 refresh(&ui_c, &state, &suppress);
             }
         });
     }
-
-    // Reload.
     {
         let ui_c = ui.clone();
         let state = state.clone();
@@ -825,8 +959,6 @@ fn connect(ui: &Ui, state: &Shared, suppress: &Rc<Cell<bool>>) {
             refresh(&ui_c, &state, &suppress);
         });
     }
-
-    // Backup.
     {
         let ui_c = ui.clone();
         let state = state.clone();
@@ -840,8 +972,6 @@ fn connect(ui: &Ui, state: &Shared, suppress: &Rc<Cell<bool>>) {
             }
         });
     }
-
-    // Write the selected preset.
     {
         let ui_c = ui.clone();
         let state = state.clone();
@@ -869,17 +999,26 @@ fn connect(ui: &Ui, state: &Shared, suppress: &Rc<Cell<bool>>) {
                     .read_patch(selected as u8)
                     .map_err(|e| e.to_string())?
                     .unwrap_or_default();
-                Ok((ack, readback == bytes))
+                // Persist: the app commits the table with an empty write to 0xF0000000.
+                let commit = pedal.commit().map_err(|e| e.to_string())?.unwrap_or(0xff);
+                Ok((ack, readback == bytes, commit))
             });
             match result {
-                Ok((0, true)) => {
+                Ok((0, true, 0)) => {
                     state.borrow_mut().original = Some(snapshot);
                     set_status(
                         &ui_c,
-                        &format!("Preset {} gravado e conferido na pedaleira.", SLOT_LABELS[selected]),
+                        &format!(
+                            "{} gravado e salvo na memória da pedaleira.",
+                            SLOT_LABELS[selected]
+                        ),
                     );
                 }
-                Ok((ack, verified)) => set_status(
+                Ok((0, true, commit)) => set_status(
+                    &ui_c,
+                    &format!("Gravado, mas a pedaleira não confirmou salvar na memória (ack 0x{commit:02x})."),
+                ),
+                Ok((ack, verified, _)) => set_status(
                     &ui_c,
                     &format!("Gravação não confirmada (ack 0x{ack:02x}, verificação: {verified})."),
                 ),
@@ -888,8 +1027,6 @@ fn connect(ui: &Ui, state: &Shared, suppress: &Rc<Cell<bool>>) {
             refresh(&ui_c, &state, &suppress);
         });
     }
-
-    // Restore.
     {
         let ui_c = ui.clone();
         let state = state.clone();
@@ -929,15 +1066,13 @@ fn connect(ui: &Ui, state: &Shared, suppress: &Rc<Cell<bool>>) {
                 }
                 Ok(report) => set_status(
                     &ui_c,
-                    &format!("Restauração parcial ({}/{} blocos).", report.chunks_ok, report.chunks),
+                    &format!("Restauração parcial ({}/{}).", report.chunks_ok, report.chunks),
                 ),
                 Err(e) => set_status(&ui_c, &format!("Falha ao restaurar: {e}")),
             }
             refresh(&ui_c, &state, &suppress);
         });
     }
-
-    // Play the selected preset on the pedal.
     {
         let ui_c = ui.clone();
         let state = state.clone();
@@ -957,12 +1092,12 @@ fn connect(ui: &Ui, state: &Shared, suppress: &Rc<Cell<bool>>) {
                     set_status(
                         &ui_c,
                         &format!(
-                            "A pedaleira está tocando o preset {}.",
+                            "A pedaleira está tocando {}.",
                             SLOT_LABELS.get(selected as usize).copied().unwrap_or("?")
                         ),
                     );
                 }
-                Err(e) => set_status(&ui_c, &format!("Falha ao trocar de preset: {e}")),
+                Err(e) => set_status(&ui_c, &format!("Falha ao trocar de som: {e}")),
             }
             refresh(&ui_c, &state, &suppress);
         });

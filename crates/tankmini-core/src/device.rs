@@ -103,6 +103,12 @@ impl Pedal {
         })
     }
 
+    /// Commit the working preset table to flash: `WRITE type 4 0xF0000000` with an
+    /// empty payload, which is exactly what the official app does on save.
+    pub fn commit(&mut self) -> std::io::Result<Option<u8>> {
+        self.write(region::DEV, crate::ADDR_SAVE, &[])
+    }
+
     pub fn active_slot(&mut self) -> std::io::Result<Option<u8>> {
         Ok(self
             .read(region::DEV, ADDR_ACTIVE_SLOT, 1)?

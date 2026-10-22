@@ -49,6 +49,11 @@ pub const ADDR_PRESET: u32 = 0x0000;
 pub const ADDR_ACTIVE_SLOT: u32 = 0x2000_0000;
 /// Writing `[i]` to `ADDR_SLOT_SELECT + i` selects slot `i`.
 pub const ADDR_SLOT_SELECT: u32 = 0xE000_0000;
+/// Writing an empty payload here commits the preset table to flash.
+///
+/// Recovered from the app's `PresetStore._write(0xF0000000, const [])` on save;
+/// ACKed by the unit.
+pub const ADDR_SAVE: u32 = 0xF000_0000;
 /// Address of the cab/amp name table inside [`region::USR`].
 pub const ADDR_CAB_NAMES: u32 = 0x8000_0000;
 /// Length of one name entry in the cab/amp table (ASCII, NUL padded).

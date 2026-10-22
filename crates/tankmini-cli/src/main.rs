@@ -63,6 +63,8 @@ enum Command {
         #[arg(long)]
         write: bool,
     },
+    /// Commit the working preset table to the pedal's flash
+    Save,
     /// Print the 32 cab/amp names stored on the pedal
     Names,
     /// Raw protocol access: read/write a memory region
@@ -345,6 +347,15 @@ fn run(cli: Cli) -> Result<(), String> {
                     "gravado: ack=0x{ack:02x} verificado={}",
                     back == bytes
                 );
+            }
+            Ok(())
+        }
+        Command::Save => {
+            let (mut pedal, _) = open_device(cli.dev.clone())?;
+            match pedal.commit().map_err(|e| e.to_string())? {
+                Some(0) => println!("tabela de presets gravada na flash (ack 0x00)"),
+                Some(other) => println!("flash recusou a gravação (ack 0x{other:02x})"),
+                None => println!("sem resposta ao comando de gravação"),
             }
             Ok(())
         }

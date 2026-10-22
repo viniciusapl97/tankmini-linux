@@ -104,10 +104,18 @@ disassembly of the builders plus the FFI struct layout.
 | Write preset `i` | `WRITE type 4 0x0000+i*92` + 92 bytes | verified (read-back), RAM only |
 | Write whole table | 173-byte chunks from `0x0000`, ACK per chunk | verified |
 
-Persistence: every write so far is accepted, read back identically, and then
-**discarded when any slot is selected again** — the pedal reloads the table from
-flash. The save-to-flash command is still unknown; the app does have a
-`flash_writer.dart` and a `save` on its preset store, so the capability exists.
+### Save to flash (**verified**)
+
+`WRITE type 4 0xF0000000` with an **empty payload** commits the working table to
+flash — ACKed with status `0x00` on this unit. This is exactly what the official
+app does (`PresetStore._write(0xF0000000, const [])`, recovered from
+`preset_store.dart`), and it is what `tankmini save` and the GUI's
+"Salvar na pedaleira" send after writing the bytes.
+
+Sequence: write the preset (92 B at `0x0000 + i*92`) → read back and compare →
+`WRITE type 4 0xF0000000` (empty) → ACK. A value written this way survives slot
+switches; without the commit step the pedal keeps serving it from RAM only until
+the next reload from flash.
 
 ## 4. Name table (type 5)
 
