@@ -14,9 +14,10 @@ built on a reverse-engineered USB-MIDI protocol instead of the official M-EFCS a
 | Cab/amp name table (20 × 14 B) | verified |
 | Block write (173-byte chunks, ACK, read-back verify) | verified (RAM only) |
 | Save to flash | **not found yet** |
-| Preset block field map (record/param semantics) | **in progress** |
+| Preset table structure (21 × 92 B, chain, 36 params) | verified, see `docs/protocol/preset-map.md` |
+| Parameter names / module roles | **open** (needs the app or an audio oracle) |
 | CLI (`tankmini`) | working: devices, identify, dump, show, slot, apply, restore, backups, names, raw |
-| GTK4 app (`tankmini-gui`) | builds; records/params editor, backup, apply, restore |
+| GTK4 app (`tankmini-gui`) | running: preset list, 6-chain editor, 36 sliders per preset, backup/restore, hex tab |
 
 ## Hardware
 

@@ -70,7 +70,13 @@ by comparing a 256 KB dump against the live preset.
 
 ## 6. Preset block layout (type 4, `0x0000`, 1942 bytes)
 
-The block is 21 records of **92 bytes** (`21 × 92 = 1932`) followed by
+**Correction (later session):** the 21 × 92-byte records are the pedal's **21
+presets**, not 21 effect blocks of a single preset. Reading `0x0000 + i*92 len
+92` returns the same bytes as that slice of the whole-table read, and switching
+presets on the pedal does not change the table. Full field map:
+[`preset-map.md`](preset-map.md).
+
+The block is 21 presets of **92 bytes** (`21 × 92 = 1932`) followed by
 `"PATCHEND" 00 00`. **Verified**: the on-device read is byte-identical to the
 first records of `tankMini_am3_preset.bin` shipped inside the official app, and
 the record stride reproduces every block boundary seen in the dump.
@@ -82,10 +88,9 @@ Per-record first 0x20 bytes (offsets relative to the record):
 | `0x00` | 2 | `0x3a`–`0x61` | per-record id, constant per record across presets (**inferred**) |
 | `0x02` | 2 | always `00 01` | version/marker (**inferred**) |
 | `0x04` | 4 | `02 03 04 05` | fixed index list on every record (**inferred**) |
-| `0x08` | 12 | mixed `00/01/02…` | flags per sub-block (**inferred**) |
-| `0x0f` | 1 | `03, 03, 05, 01, 0d, 0b, …` | effect/block type id, repeats across presets (**inferred**) |
-| `0x10` | 16 | mixed | flags/ids (**inferred**) |
-| `0x20` | 60 | u16 LE values, mostly 0–100 | 30 parameters per record (**inferred**) |
+| `0x08` | 6 | `00/01/02` | per-module flag (**inferred**) |
+| `0x0e`–`0x13` | 6 | small values | unknown / amp-cab model candidates (**inferred**) |
+| `0x14` | 72 | u16 LE, all values 0–100 | 36 parameters = 6 modules × 6 slots (**verified range**) |
 
 Field semantics, parameter ranges and the meaning of the id at `0x00` are still
 open — the next step is the Dart AOT analysis of `libapp.so`

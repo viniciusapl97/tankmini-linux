@@ -1,0 +1,105 @@
+# Preset map
+
+What the pedal actually stores, byte by byte. Every line carries its evidence
+level: **verified** (observed on this unit), **from app** (recovered from the
+official M-EFCS binaries via Blutter) or **inferred**.
+
+## 1. The table
+
+`READ type 4 addr 0x0000 len 1942` returns:
+
+```
+0x0000 .. 0x078b   21 presets × 92 bytes   (0x078c = 1932 bytes)
+0x078c .. 0x0793   "PATCHEND"
+0x0794 .. 0x0795   00 00
+```
+
+The 21 entries are the pedal's 21 presets (7 banks × A/B/C), **not** 21 effect
+blocks inside one preset: reading `addr = i*92 len 92` returns exactly the same
+bytes as the corresponding slice of the whole-table read (**verified** for
+i = 0, 1, 2, 5, 20), so a single preset can be read and written on its own.
+
+Reading the table is independent of the active slot — switching presets on the
+pedal does not change it (**verified**). That is why an earlier "every slot reads
+the same" result was a red herring: we were reading the whole library, not the
+active preset.
+
+## 2. One preset (92 bytes)
+
+| Off | Size | Field | Evidence |
+|---|---|---|---|
+| `0x00` | 2 | patch id (observed `0x3a`–`0x61`); changes with content | verified raw, meaning unknown |
+| `0x02` | 6 | **chain**: signal order of the 6 modules, always a permutation of `0..5` | verified (all 21 presets are permutations) |
+| `0x08` | 6 | one flag byte per module, values `0`, `1`, `2` | inferred (enable/bypass) |
+| `0x0e` | 1 | `0`–`2` | unknown |
+| `0x0f` | 1 | `0`–`19` across the factory presets — the range of the 20 preamp models | inferred |
+| `0x10` | 4 | small values, `0`–`0x13` | unknown |
+| `0x14` | 72 | **36 parameters**, u16 LE, every observed value in `0..100` | verified (range) |
+
+`0x14 + 36*2 = 0x5c`, i.e. the parameter block fills the rest of the 92 bytes
+exactly (**verified**).
+
+### Parameters
+
+36 values = 6 modules × 6 slots. The first six always read `0` in the factory
+presets, so the first module of the chain position carries no parameter bytes of
+its own; modules further down the chain carry the real values (e.g. preset 1B:
+`75, 75, 49, 58, 70, 0`).
+
+The app's own parameter vocabulary for this device family (**from app**, extracted
+from `compact_effect_params.dart`):
+
+| Group | Variants | Parameters per variant |
+|---|---|---|
+| Reverb | Room, Hall, Swell, Spring, Shimmer, Cloud | `Decay, Mix, HPass, LPass, Depth` / `…, RiseT` / `…, Combs` / `Tone, Pitch, Amt` / `…, Diff` |
+| Delay | Analog, Duck, Dual, Lofi | `Time, Fb, Mix, Phaser, Pitch` / `…, Unpack, Speed, Depth` / `Time, Fb, Mix, Speed, Depth` / `…, Grit` |
+| Modulation | Chorus, Phaser, Tremolo, Flanger, Vibrato, Univibe, Autofilter | `Speed, Depth, Mix` / `Speed, ParamA, ParamB, Fb` / `Speed, Depth, Level` / `Speed, Depth, Fb, Mix` / `Speed, Depth` / `Speed, Depth, Mix` / `Speed, Min, Max, Mix, Fb` |
+
+The manual lists exactly 7 modulations, 6 reverbs, 5 delays, 20 preamps, 20 IR
+cab slots and a 3-band EQ for this pedal, which matches those lists.
+
+**What is still missing** to label each of the 36 slots: which module index in
+the chain maps to AMP / CAB / MOD / DLY / RVB, and which variant byte selects the
+reverb/delay/modulation child. Both live in the app's runtime-built tables
+(`EffectChildType`, `EffectViewParam`) that are not materialised in the AOT
+snapshot; recovering them needs either the app running (BLE/USB oracle) or
+disassembly of the builders plus the FFI struct layout.
+
+## 3. Controls
+
+| Control | Wire | Evidence |
+|---|---|---|
+| Active slot | `READ type 4 0x20000000 len 1` | verified |
+| Select slot `i` | `WRITE type 4 0xE0000000+i`, data `[i, i]` (the app sends two ints) | verified |
+| Read preset `i` | `READ type 4 0x0000+i*92 len 92` | verified |
+| Write preset `i` | `WRITE type 4 0x0000+i*92` + 92 bytes | verified (read-back), RAM only |
+| Write whole table | 173-byte chunks from `0x0000`, ACK per chunk | verified |
+
+Persistence: every write so far is accepted, read back identically, and then
+**discarded when any slot is selected again** — the pedal reloads the table from
+flash. The save-to-flash command is still unknown; the app does have a
+`flash_writer.dart` and a `save` on its preset store, so the capability exists.
+
+## 4. Name table (type 5)
+
+20 entries × 14 bytes at `0x80000000`, NUL padded, ends exactly at 280 bytes
+(**verified**): `EAGLProV30s`, `Sperimental`, `JUICE4x12V30`, `Mess Bog`,
+`FdChamp`, `FdPrJunir`, `Mar960BV30`, `DizzlV30`, `Electrovoice`,
+`MessDRectV30`, `TwinJensenC`, `TwedDlx1X12`, `FendShowman`, `J120Rolnd`,
+`UK-C30Silvers`, `BassAgula25`, `BassJensen10`, `BassFdBassman`, `BassAmpg410`,
+`BassEDN300`.
+
+These are the 20 IR CAB slots of the pedal. The IR payload itself is not in the
+table; the app ships `tankMini_am{3,4}_ampCab.bin` (245 760 B, `AM2\0` magic +
+name + float header + samples) and uploads it through an address still unknown.
+
+## 5. How this was recovered
+
+1. USB probing with `tools/mvprobe.py` (identity, region sweep, chunked reads).
+2. The official APK's own preset template matched the device dump byte for byte,
+   confirming the block layout before any decoder was written.
+3. Blutter (`../_tools/blutter`) against `libapp.so`, giving the app's module
+   structure (`protocol/preset_store.dart`, `preset_layout.dart`,
+   `data/products/tank_mini/*`, `data/products/shared/compact_effect_params.dart`).
+4. Differential analysis of the 21 factory presets to separate headers from the
+   parameter block and to bound every value range.

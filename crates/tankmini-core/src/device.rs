@@ -80,7 +80,10 @@ impl Pedal {
 
     /// Write the whole block in ACKed chunks and verify the read-back.
     pub fn write_preset(&mut self, preset: &Preset) -> std::io::Result<WriteReport> {
-        let data = preset.raw();
+        self.write_block(preset.raw())
+    }
+
+    fn write_block(&mut self, data: &[u8]) -> std::io::Result<WriteReport> {
         let mut chunks_ok = 0usize;
         let mut chunks = 0usize;
         for (i, part) in data.chunks(WRITE_CHUNK).enumerate() {
@@ -91,8 +94,8 @@ impl Pedal {
             }
         }
         std::thread::sleep(Duration::from_millis(120));
-        let readback = self.read_preset()?;
-        let verified = readback.as_ref() == Some(preset);
+        let readback = self.read(region::DEV, ADDR_PRESET, data.len())?;
+        let verified = readback.as_deref() == Some(data);
         Ok(WriteReport {
             chunks,
             chunks_ok,
@@ -109,6 +112,29 @@ impl Pedal {
     pub fn select_slot(&mut self, slot: u8) -> std::io::Result<bool> {
         let ack = self.write(region::DEV, ADDR_SLOT_SELECT + slot as u32, &[slot])?;
         Ok(ack == Some(0))
+    }
+
+    /// Read the whole preset table (21 patches + trailer).
+    pub fn read_table(&mut self) -> std::io::Result<Option<crate::patch::PresetTable>> {
+        let raw = self.read(region::DEV, ADDR_PRESET, PRESET_LEN)?;
+        Ok(raw.and_then(|r| crate::patch::PresetTable::from_raw(r).ok()))
+    }
+
+    /// Write the whole table in ACKed chunks and verify the read-back.
+    pub fn write_table(&mut self, table: &crate::patch::PresetTable) -> std::io::Result<WriteReport> {
+        self.write_block(table.raw())
+    }
+
+    /// Read one patch (92 bytes) by slot index.
+    pub fn read_patch(&mut self, index: u8) -> std::io::Result<Option<Vec<u8>>> {
+        let addr = ADDR_PRESET + index as u32 * crate::patch::PATCH_LEN as u32;
+        self.read(region::DEV, addr, crate::patch::PATCH_LEN)
+    }
+
+    /// Write one patch (92 bytes) by slot index.
+    pub fn write_patch(&mut self, index: u8, data: &[u8]) -> std::io::Result<u8> {
+        let addr = ADDR_PRESET + index as u32 * crate::patch::PATCH_LEN as u32;
+        Ok(self.write(region::DEV, addr, data)?.unwrap_or(0xff))
     }
 
     /// Cab/amp names: 20 entries of 14 bytes at `USR` `0x80000000`,
