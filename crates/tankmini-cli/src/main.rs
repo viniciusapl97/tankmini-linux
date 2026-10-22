@@ -52,6 +52,17 @@ enum Command {
     },
     /// List local backups
     Backups,
+    /// Inspect (and optionally edit) one preset of the table
+    Patch {
+        /// Preset index 0-20 (1A..7C is index 0..20)
+        index: usize,
+        /// Edit in the form module:param=value (module 1-6, param 1-6)
+        #[arg(long = "set")]
+        set: Option<String>,
+        /// Write the preset back to the pedal after editing
+        #[arg(long)]
+        write: bool,
+    },
     /// Print the 32 cab/amp names stored on the pedal
     Names,
     /// Raw protocol access: read/write a memory region
@@ -277,6 +288,63 @@ fn run(cli: Cli) -> Result<(), String> {
             }
             for p in list {
                 println!("{}", p.display());
+            }
+            Ok(())
+        }
+        Command::Patch { index, set, write } => {
+            let (mut pedal, _) = open_device(cli.dev.clone())?;
+            let table = pedal
+                .read_table()
+                .map_err(|e| e.to_string())?
+                .ok_or("sem tabela de presets")?;
+            let mut table = table;
+            let patch = table.patch(index).ok_or("índice fora da faixa 0-20")?;
+            println!(
+                "preset {} (index {}) id=0x{:02x} cadeia={:?} flags={:?}",
+                patch.label(),
+                index,
+                patch.id(),
+                patch.chain(),
+                patch.module_flags()
+            );
+            for module in 0..6 {
+                let params: Vec<String> = (0..6)
+                    .map(|i| format!("{:>3}", patch.param(module, i).unwrap_or(0)))
+                    .collect();
+                println!("  módulo {}: {}", module + 1, params.join(" "));
+            }
+            if let Some(spec) = set {
+                let (target, value) = spec.split_once('=').ok_or("use módulo:param=valor")?;
+                let (module, param) = target.split_once(':').ok_or("use módulo:param=valor")?;
+                let module: usize = module.parse().map_err(|_| "módulo inválido")?;
+                let param: usize = param.parse().map_err(|_| "param inválido")?;
+                let value: u16 = value.parse().map_err(|_| "valor inválido")?;
+                if module < 1 || module > 6 || param < 1 || param > 6 || value > 100 {
+                    return Err("faixa: módulo 1-6, param 1-6, valor 0-100".into());
+                }
+                table.set_param(index, module - 1, param - 1, value);
+                println!("editado: módulo {module} param {param} = {value}");
+            }
+            if write {
+                let bytes = table.patch(index).unwrap().raw().to_vec();
+                let store = BackupStore::new(BackupStore::default_root());
+                let current = pedal.read_table().map_err(|e| e.to_string())?;
+                if let Some(current) = current {
+                    let path = store
+                        .save(&current.to_preset(), Some(index as u8), "antes de gravar preset")
+                        .map_err(|e| e.to_string())?;
+                    println!("backup: {}", path.display());
+                }
+                let ack = pedal.write_patch(index as u8, &bytes).map_err(|e| e.to_string())?;
+                std::thread::sleep(Duration::from_millis(150));
+                let back = pedal
+                    .read_patch(index as u8)
+                    .map_err(|e| e.to_string())?
+                    .unwrap_or_default();
+                println!(
+                    "gravado: ack=0x{ack:02x} verificado={}",
+                    back == bytes
+                );
             }
             Ok(())
         }
