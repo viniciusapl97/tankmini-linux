@@ -15,6 +15,7 @@ pub mod macros;
 pub mod names;
 pub mod patch;
 pub mod paths;
+pub mod pitch;
 pub mod preset;
 pub mod settings;
 pub mod sys7;

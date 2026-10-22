@@ -106,6 +106,18 @@ enum Command {
         #[command(subcommand)]
         op: RawOp,
     },
+    /// Live tuner: reads the pedal's USB audio and prints the detected note
+    Tune {
+        /// Reference pitch for A4 (default 440)
+        #[arg(long, default_value_t = 440.0)]
+        a4: f32,
+        /// PipeWire/Pulse source name; auto-detected (the pedal) when omitted
+        #[arg(long)]
+        source: Option<String>,
+        /// Keep running until Ctrl+C instead of stopping after the first stable note
+        #[arg(long = "watch")]
+        watch: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -702,6 +714,10 @@ fn run(cli: Cli) -> Result<(), String> {
             }
             Ok(())
         }
+        Command::Tune { a4, source, watch } => {
+            tune(a4, source, watch).map_err(|e| e.to_string())?;
+            Ok(())
+        }
         Command::Raw { op } => {
             let (mut pedal, _) = open_device(cli.dev.clone())?;
             match op {
@@ -738,4 +754,103 @@ fn main() {
         eprintln!("error: {e}");
         std::process::exit(1);
     }
+}
+
+/// Name of the pedal's capture source in PipeWire/PulseAudio, if it is there.
+fn pedal_source() -> Option<String> {
+    let out = std::process::Command::new("pactl")
+        .args(["list", "short", "sources"])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    text.lines()
+        .find(|l| l.contains("Jieli") && !l.contains(".monitor"))
+        .and_then(|l| l.split_whitespace().nth(1))
+        .map(str::to_string)
+}
+
+/// Capture 44.1 kHz mono f32 from the pedal and print the detected note.
+fn tune(a4: f32, source: Option<String>, watch: bool) -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::Read;
+
+    let rate = 44_100u32;
+    let src = source.or_else(pedal_source).ok_or(
+        "fonte de áudio da pedaleira não encontrada (o app precisa dela como interface USB; \
+         veja tools/tankmini-audio.sh status)",
+    )?;
+
+    let mut child = std::process::Command::new("pw-record")
+        .args([
+            "--raw",
+            "--format=f32",
+            "--rate=44100",
+            "--channels=1",
+            "--latency=4096/44100",
+            &format!("--target={src}"),
+            "-",
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()?;
+
+    println!("afinador: capturando de {src} (A4 = {a4} Hz) — Ctrl+C para sair");
+    let mut stdout = child.stdout.take().expect("piped stdout");
+    let window = tankmini_core::pitch::WINDOW;
+    let mut bytes = vec![0u8; window * 4];
+    let mut stable = 0;
+    let mut last = String::new();
+
+    loop {
+        let mut filled = 0;
+        while filled < bytes.len() {
+            match stdout.read(&mut bytes[filled..]) {
+                Ok(0) => break,
+                Ok(n) => filled += n,
+                Err(e) => return Err(e.into()),
+            }
+        }
+        if filled < bytes.len() {
+            break;
+        }
+        let samples: Vec<f32> = bytes
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
+        let Some(mut pitch) = tankmini_core::pitch::detect(&samples, rate) else {
+            print!("\r   — sem sinal —                                    ");
+            use std::io::Write;
+            let _ = std::io::stdout().flush();
+            stable = 0;
+            continue;
+        };
+        pitch = tankmini_core::pitch::pitch_from_hz(pitch.hz, a4, pitch.rms);
+        let string = tankmini_core::pitch::nearest_string(&pitch)
+            .map(|s| format!(" (corda {s})"))
+            .unwrap_or_default();
+        let advice = pitch.advice().unwrap_or("afinado");
+        let line = format!(
+            "{:>3}{}  {:>7.2} Hz  {:>+6.1} cents  {}{}",
+            pitch.note,
+            pitch.octave,
+            pitch.hz,
+            pitch.cents,
+            advice,
+            string
+        );
+        print!("\r{line:<60}");
+        use std::io::Write;
+        let _ = std::io::stdout().flush();
+        if line == last {
+            stable += 1;
+        } else {
+            stable = 0;
+            last = line.clone();
+        }
+        if !watch && stable >= 4 {
+            println!("\n{line}");
+            break;
+        }
+    }
+    let _ = child.kill();
+    Ok(())
 }
