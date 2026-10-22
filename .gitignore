@@ -1,0 +1,12 @@
+# captures: raw dumps, APKs, extracted assets, PC builds
+captures/*
+!captures/.gitkeep
+
+# python
+__pycache__/
+*.pyc
+
+# editors
+.idea/
+.vscode/
+*.swp

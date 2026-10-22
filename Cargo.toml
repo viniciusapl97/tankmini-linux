@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = ["crates/tankmini-core", "crates/tankmini-cli", "crates/tankmini-gui"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/v1ni/tankmini-linux"
+
+[profile.release]
+lto = "thin"
+strip = true

@@ -1,0 +1,15 @@
+[package]
+name = "tankmini-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Command line control for the M-VAVE TANK MINI pedal"
+
+[[bin]]
+name = "tankmini"
+path = "src/main.rs"
+
+[dependencies]
+tankmini-core = { path = "../tankmini-core" }
+libc = "0.2"
+clap = { version = "4", features = ["derive"] }

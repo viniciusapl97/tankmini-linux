@@ -1,0 +1,9 @@
+[package]
+name = "tankmini-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Reverse-engineered USB-MIDI protocol for the M-VAVE TANK MINI pedal"
+
+[dependencies]
+libc = "0.2"
