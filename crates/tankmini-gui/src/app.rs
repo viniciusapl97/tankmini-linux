@@ -338,6 +338,17 @@ impl App {
                     self.toast("IR tocando na pedaleira");
                 }
             }
+            Event::Amp { slot, ok, message } => {
+                if slot.is_some() || !ok {
+                    self.toast(&message);
+                } else {
+                    self.toast("Amp tocando na pedaleira");
+                }
+            }
+            Event::AmpNames(names) => {
+                self.state.borrow_mut().amp_names = names;
+                self.refresh_all();
+            }
             Event::CabNames(names) => {
                 self.state.borrow_mut().cab_names = names;
                 self.refresh_all();

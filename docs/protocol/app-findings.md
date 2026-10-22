@@ -505,6 +505,19 @@ back over USB in 512-byte blocks.
   - the final hidden state × 2⁻²¹ is the LMT payload (a warm start state).
   - `tools/lmt_reference.py` runs the original library under Unicorn and
     reproduces the app's LMT for that file **byte for byte**.
+  - Exact arithmetic (recovered against the emulator, step by step): weights
+    `q = trunc(f32(w) * 2097151.0f)`; per hidden unit k, with h the previous
+    state and x = q(input):
+    `r = σ(((Σ W_hr·h + W_ir·x) >> 21) + b_ir + b_hr)`, same for z;
+    `hn = (Σ W_hn·h >> 21) + b_hn`;
+    `n = tanh(b_in + ((W_in·x + r·hn) >> 21))` (both products summed in 64
+    bits before the shift — this is what makes it bit exact);
+    `h' = ((h − n)·z >> 21) + n`. σ/tanh: 512-point tables over −16..16 in
+    Q23 (σ floored, tanh truncated) with linear interpolation,
+    `(tab[i] + frac·slope[i]/2¹⁷) >> 2`; the tables follow from their
+    formulas, so none of the vendor's data is copied.
+  - `tankmini-core::amp` implements it and matches the library on all 9 AM4
+    community models and a synthetic one (unit test).
 - Community API (public, no login): `POST /bbs/api/getlist` with
   `{"search","select":[],"sort":1,"currentPage","pageSize"}`; download with
   `GET /bbs/api/download?articleId=<id>&file=<title>`. On 2026-10-22 it served

@@ -48,6 +48,10 @@ pub enum Command {
     CabAudition(Vec<u8>),
     /// Back up CAB slot `slot`, then store `record` there (**flash**).
     CabSave { slot: u8, record: Vec<u8> },
+    /// Put an AMP record ([`crate::amp::Model::record`]) in the buffer (RAM).
+    AmpAudition(Vec<u8>),
+    /// Back up AMP slot `slot`, then store `record` there (**flash**).
+    AmpSave { slot: u8, record: Vec<u8> },
     Shutdown,
 }
 
@@ -103,6 +107,10 @@ pub enum Event {
     Cab { slot: Option<u8>, ok: bool, message: String },
     /// The cab names after a slot was rewritten.
     CabNames(Vec<String>),
+    /// Result of `AmpAudition` (`slot` = None) or `AmpSave`.
+    Amp { slot: Option<u8>, ok: bool, message: String },
+    /// The amp names after a slot was rewritten.
+    AmpNames(Vec<String>),
 }
 
 /// One write into the edit buffer. `settle` asks for a pause afterwards: the
@@ -431,6 +439,12 @@ impl Loop {
                 Command::CabSave { slot, .. } => {
                     (self.emit)(Event::Cab { slot: Some(slot), ok: false, message: offline })
                 }
+                Command::AmpAudition(_) => {
+                    (self.emit)(Event::Amp { slot: None, ok: false, message: offline })
+                }
+                Command::AmpSave { slot, .. } => {
+                    (self.emit)(Event::Amp { slot: Some(slot), ok: false, message: offline })
+                }
                 _ => {}
             }
             return Ok(());
@@ -560,6 +574,23 @@ impl Loop {
                     (self.emit)(Event::CabNames(names));
                 }
             }
+            Command::AmpAudition(record) => {
+                let ok = self.pedal.as_mut().expect("checked").amp_upload(&record)?;
+                let message = if ok { "amp enviado para a pedaleira" } else { "a pedaleira não confirmou o amp" };
+                (self.emit)(Event::Amp { slot: None, ok, message: message.into() });
+            }
+            Command::AmpSave { slot, record } => {
+                let pedal = self.pedal.as_mut().expect("checked");
+                let (ok, message) = match save_amp(pedal, slot, &record)? {
+                    Ok(path) => (true, format!("amp gravado no lugar {} (backup em {})", slot + 1, path.display())),
+                    Err(e) => (false, e),
+                };
+                (self.emit)(Event::Amp { slot: Some(slot), ok, message });
+                if ok {
+                    let names = self.pedal.as_mut().expect("checked").amp_names()?;
+                    (self.emit)(Event::AmpNames(names));
+                }
+            }
             Command::Shutdown => {}
         }
         Ok(())
@@ -571,6 +602,30 @@ pub fn cab_backup_dir() -> std::path::PathBuf {
     crate::paths::data_dir().join("cab-backups")
 }
 
+/// Where AMP slot backups go (one 8192-byte file per save).
+pub fn amp_backup_dir() -> std::path::PathBuf {
+    crate::paths::data_dir().join("amp-backups")
+}
+
+fn stamp() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
+fn save_amp(pedal: &mut Pedal, slot: u8, record: &[u8]) -> io::Result<Result<std::path::PathBuf, String>> {
+    let Some(previous) = pedal.amp_slot(slot)? else {
+        return Ok(Err("não consegui ler o amp atual para o backup; nada foi gravado".into()));
+    };
+    let dir = amp_backup_dir();
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(format!("amp{slot:02}-{}.bin", stamp()));
+    std::fs::write(&path, previous)?;
+    if pedal.amp_save(slot, record)? {
+        Ok(Ok(path))
+    } else {
+        Ok(Err(format!("a gravação não conferiu (backup em {})", path.display())))
+    }
+}
+
 /// Keep a copy of the slot, then save. The inner error is for the user.
 fn save_cab(pedal: &mut Pedal, slot: u8, record: &[u8]) -> io::Result<Result<std::path::PathBuf, String>> {
     let Some(previous) = pedal.cab_slot(slot)? else {
@@ -578,11 +633,7 @@ fn save_cab(pedal: &mut Pedal, slot: u8, record: &[u8]) -> io::Result<Result<std
     };
     let dir = cab_backup_dir();
     std::fs::create_dir_all(&dir)?;
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let path = dir.join(format!("cab{slot:02}-{stamp}.bin"));
+    let path = dir.join(format!("cab{slot:02}-{}.bin", stamp()));
     std::fs::write(&path, previous)?;
     if pedal.cab_save(slot, record)? {
         Ok(Ok(path))

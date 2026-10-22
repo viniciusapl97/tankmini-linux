@@ -4,6 +4,7 @@
 //! M-EFCS app; see `docs/protocol/tank-mini-usb-sysex.md` for the evidence and
 //! the verified/unverified status of each claim.
 
+pub mod amp;
 pub mod backup;
 pub mod catalog;
 pub mod device;

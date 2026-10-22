@@ -193,6 +193,16 @@ impl Pedal {
     /// where the official app puts it to audition and before saving. RAM only.
     /// Returns whether the read-back matches.
     pub fn cab_upload(&mut self, record: &[u8]) -> std::io::Result<bool> {
+        self.model_upload(record)
+    }
+
+    /// Same buffer for an AMP record ([`crate::amp`]): the app sends both kinds
+    /// to type 5 `0x0`.
+    pub fn amp_upload(&mut self, record: &[u8]) -> std::io::Result<bool> {
+        self.model_upload(record)
+    }
+
+    fn model_upload(&mut self, record: &[u8]) -> std::io::Result<bool> {
         // Small exchanges only: one 3092-byte read of this buffer left the
         // pedal's USB side hung until a power cycle (2026-10-22). 128-byte
         // writes and 512-byte reads are what was tested.
@@ -216,9 +226,41 @@ impl Pedal {
 
     /// One stored CAB slot (4096 bytes).
     pub fn cab_slot(&mut self, slot: u8) -> std::io::Result<Option<Vec<u8>>> {
-        let addr = crate::ir::ADDR_SLOTS + slot as u32 * crate::ir::SLOT_LEN as u32;
-        let mut out = Vec::with_capacity(crate::ir::SLOT_LEN);
-        for off in (0..crate::ir::SLOT_LEN).step_by(512) {
+        self.read_slot(crate::ir::ADDR_SLOTS + slot as u32 * crate::ir::SLOT_LEN as u32, crate::ir::SLOT_LEN)
+    }
+
+    /// One stored AMP slot (8192 bytes).
+    pub fn amp_slot(&mut self, slot: u8) -> std::io::Result<Option<Vec<u8>>> {
+        self.read_slot(crate::amp::ADDR_SLOTS + slot as u32 * crate::amp::SLOT_LEN as u32, crate::amp::SLOT_LEN)
+    }
+
+    /// Store an AMP record in slot `slot` (**writes flash**): upload, then
+    /// `WRITE 0xF0000000 + slot [0]`, verified by reading the slot back.
+    pub fn amp_save(&mut self, slot: u8, record: &[u8]) -> std::io::Result<bool> {
+        if slot as usize >= crate::amp::SLOT_COUNT || record.len() != crate::amp::RECORD_LEN {
+            return Ok(false);
+        }
+        if !self.amp_upload(record)? {
+            return Ok(false);
+        }
+        if self.write(region::USR, crate::amp::ADDR_SAVE_AMP + slot as u32, &[0])? != Some(0) {
+            return Ok(false);
+        }
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(200));
+            if let Some(stored) = self.amp_slot(slot)? {
+                if stored.starts_with(record) {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
+    }
+
+    fn read_slot(&mut self, addr: u32, len: usize) -> std::io::Result<Option<Vec<u8>>> {
+        let mut out = Vec::with_capacity(len);
+        for off in (0..len).step_by(512) {
             match self.read(region::USR, addr + off as u32, 512)? {
                 Some(part) => out.extend(part),
                 None => return Ok(None),

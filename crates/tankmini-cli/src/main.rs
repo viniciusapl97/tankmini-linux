@@ -111,6 +111,11 @@ enum Command {
         #[command(subcommand)]
         op: CabOp,
     },
+    /// Amp models (.am4data): audition in RAM, or store in an AMP slot
+    Amp {
+        #[command(subcommand)]
+        op: AmpOp,
+    },
     /// Live tuner: reads the pedal's USB audio and prints the detected note
     Tune {
         /// Reference pitch for A4 (default 440)
@@ -170,6 +175,31 @@ enum CabOp {
         file: PathBuf,
         #[arg(long, default_value_t = tankmini_core::ir::DEFAULT_LEVEL)]
         level: u8,
+        #[arg(long)]
+        name: Option<String>,
+        /// Confirm the flash write
+        #[arg(long)]
+        yes: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum AmpOp {
+    /// Send an .am4data to the pedal's audition buffer (RAM only)
+    Audition {
+        file: PathBuf,
+        /// Name shown on the pedal (14 characters); the model's own by default
+        #[arg(long)]
+        name: Option<String>,
+        /// Also write the record (model + LMT block) to this file
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+    /// Store an .am4data in an AMP slot (writes flash)
+    Save {
+        /// Slot 0-19 (replaces the amp stored there)
+        slot: u8,
+        file: PathBuf,
         #[arg(long)]
         name: Option<String>,
         /// Confirm the flash write
@@ -768,6 +798,61 @@ fn run(cli: Cli) -> Result<(), String> {
                     let (mut pedal, _) = open_device(cli.dev.clone())?;
                     store_patch(&mut pedal, index, &t.bytes(), "antes de aplicar som pronto")?;
                     println!("{} → {}", t.name, tankmini_core::SLOT_LABELS[index]);
+                }
+            }
+            Ok(())
+        }
+        Command::Amp { op } => {
+            use tankmini_core::amp;
+            let (mut pedal, _) = open_device(cli.dev.clone())?;
+            match op {
+                AmpOp::Audition { file, name, out } => {
+                    let model = amp::Model::parse(&std::fs::read(&file).map_err(|e| e.to_string())?)?;
+                    let record = model.record(name.as_deref())?;
+                    if let Some(out) = out {
+                        std::fs::write(&out, &record).map_err(|e| e.to_string())?;
+                    }
+                    let ok = pedal.amp_upload(&record).map_err(|e| e.to_string())?;
+                    println!(
+                        "{} -> buffer: {}",
+                        name.as_deref().unwrap_or(&model.name),
+                        if ok { "ok, conferido" } else { "FALHOU" }
+                    );
+                    if !ok {
+                        return Err("a pedaleira não confirmou o envio".into());
+                    }
+                }
+                AmpOp::Save { slot, file, name, yes } => {
+                    if slot as usize >= amp::SLOT_COUNT {
+                        return Err("slot deve ser 0-19".into());
+                    }
+                    let model = amp::Model::parse(&std::fs::read(&file).map_err(|e| e.to_string())?)?;
+                    let record = model.record(name.as_deref())?;
+                    let names = pedal.amp_names().unwrap_or_default();
+                    let old = names.get(slot as usize).cloned().unwrap_or_default();
+                    let new = name.unwrap_or(model.name.clone());
+                    if !yes {
+                        return Err(format!(
+                            "isto grava na memória da pedaleira e substitui o amp {slot} ({old}) por {new}. Repita com --yes."
+                        ));
+                    }
+                    let dir = tankmini_core::worker::amp_backup_dir();
+                    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+                    let Some(prev) = pedal.amp_slot(slot).map_err(|e| e.to_string())? else {
+                        return Err("não consegui ler o slot atual para o backup; nada foi gravado".into());
+                    };
+                    let stamp = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+                    let f = dir.join(format!("amp{slot:02}-{stamp}.bin"));
+                    std::fs::write(&f, prev).map_err(|e| e.to_string())?;
+                    println!("backup do slot {slot} ({old}) em {}", f.display());
+                    if pedal.amp_save(slot, &record).map_err(|e| e.to_string())? {
+                        println!("amp {slot}: {new} gravado e conferido");
+                    } else {
+                        return Err("a gravação não conferiu".into());
+                    }
                 }
             }
             Ok(())

@@ -8,7 +8,7 @@ use adw::prelude::*;
 use gtk::{gio, glib};
 use tankmini_core::backup::BackupStore;
 use tankmini_core::catalog::Instrument;
-use tankmini_core::ir;
+use tankmini_core::{amp, ir};
 use tankmini_core::patch::{PresetTable, PATCH_COUNT, SLOT_LABELS};
 use tankmini_core::templates;
 use tankmini_core::worker::Command;
@@ -1504,6 +1504,153 @@ fn ir_dialog(app: &AppRef, path: &std::path::Path, wav: ir::Wav) {
                 if r == "save" {
                     app.send(Command::CabSave { slot, record: record() });
                     app.toast("Gravando o IR…");
+                    dialog_c2.close();
+                }
+            });
+            confirm.present(Some(&dialog_c));
+        });
+    }
+    dialog.present(Some(&app.window.clone()));
+}
+
+/// Import an amp model (`.am4data`, e.g. from the M-VAVE community): audition
+/// it on the pedal (RAM) or store it in one of the 20 AMP slots (flash, after a
+/// confirmation and a backup of that slot).
+pub fn import_amp(app: &AppRef) {
+    let filter = gtk::FileFilter::new();
+    filter.set_name(Some("Modelo de amp (.am4data)"));
+    filter.add_suffix("am4data");
+    filter.add_suffix("am4Data");
+    let filters = gio::ListStore::new::<gtk::FileFilter>();
+    filters.append(&filter);
+    let picker = gtk::FileDialog::builder().title("Escolher um modelo de amp").filters(&filters).build();
+    let app = app.clone();
+    picker.open(Some(&app.window.clone()), gio::Cancellable::NONE, move |res| {
+        let Ok(file) = res else { return };
+        let Some(path) = file.path() else { return };
+        match std::fs::read(&path).map_err(|e| e.to_string()).and_then(|b| amp::Model::parse(&b)) {
+            Ok(model) => amp_dialog(&app, &path, model),
+            Err(e) => app.toast(&format!("Modelo recusado: {e}")),
+        }
+    });
+}
+
+fn amp_dialog(app: &AppRef, path: &std::path::Path, model: amp::Model) {
+    let dialog = adw::Dialog::new();
+    dialog.set_title("Importar amp");
+    dialog.set_content_width(480);
+
+    let page = adw::PreferencesPage::new();
+    let group = adw::PreferencesGroup::new();
+    group.set_title(&path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
+    group.set_description(Some(
+        "Modelo AM4 (captura de amp por rede neural). Teste antes com \"Ouvir\": modelos AM4 ainda não foram confirmados em todas as versões da pedaleira.",
+    ));
+    page.add(&group);
+
+    let name = adw::EntryRow::new();
+    name.set_title("Nome na pedaleira (até 14 letras)");
+    name.set_text(&model.name);
+    group.add(&name);
+
+    let slots = adw::ComboRow::new();
+    slots.set_title("Guardar no lugar de");
+    let labels: Vec<String> = {
+        let st = app.state.borrow();
+        (0..amp::SLOT_COUNT)
+            .map(|i| format!("{} · {}", i + 1, st.amp_names.get(i).map(String::as_str).unwrap_or("—")))
+            .collect()
+    };
+    let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
+    slots.set_model(Some(&gtk::StringList::new(&refs)));
+    slots.set_selected(amp::SLOT_COUNT as u32 - 1);
+    group.add(&slots);
+
+    let buttons = hbox(12);
+    buttons.set_halign(gtk::Align::End);
+    buttons.set_margin_top(12);
+    let listen = gtk::Button::with_label("Ouvir na pedaleira");
+    listen.add_css_class("tm-pill");
+    listen.set_tooltip_text(Some("Toca o amp na pedaleira sem gravar nada"));
+    let save = gtk::Button::with_label("Gravar no amp…");
+    save.add_css_class("tm-pill");
+    save.add_css_class("suggested-action");
+    buttons.append(&listen);
+    buttons.append(&save);
+    let actions = adw::PreferencesGroup::new();
+    actions.add(&buttons);
+    page.add(&actions);
+
+    let tv = adw::ToolbarView::new();
+    tv.add_top_bar(&adw::HeaderBar::new());
+    tv.set_content(Some(&page));
+    dialog.set_child(Some(&tv));
+
+    let model = Rc::new(model);
+    let record = {
+        let name = name.clone();
+        let model = model.clone();
+        let app = app.clone();
+        move || match model.record(Some(name.text().trim())) {
+            Ok(r) => Some(r),
+            Err(e) => {
+                app.toast(&format!("Não deu para preparar o amp: {e}"));
+                None
+            }
+        }
+    };
+    let online = {
+        let app = app.clone();
+        move || {
+            let ok = matches!(app.state.borrow().conn, Conn::Online);
+            if !ok {
+                app.toast("Conecte a pedaleira pelo USB primeiro.");
+            }
+            ok
+        }
+    };
+    {
+        let app = app.clone();
+        let record = record.clone();
+        let online = online.clone();
+        listen.connect_clicked(move |_| {
+            if online() {
+                if let Some(r) = record() {
+                    app.send(Command::AmpAudition(r));
+                }
+            }
+        });
+    }
+    {
+        let app = app.clone();
+        let dialog_c = dialog.clone();
+        save.connect_clicked(move |_| {
+            if !online() {
+                return;
+            }
+            let slot = slots.selected() as u8;
+            let new_name = name.text().trim().to_string();
+            if new_name.is_empty() {
+                app.toast("Dê um nome ao amp.");
+                return;
+            }
+            let Some(r) = record() else { return };
+            let old = labels[slot as usize].clone();
+            let confirm = adw::AlertDialog::new(
+                Some(&format!("Substituir o amp {old}?")),
+                Some(&format!(
+                    "\"{new_name}\" é gravado na memória da pedaleira no lugar dele. Uma cópia do amp atual fica guardada em {} para voltar depois.",
+                    tankmini_core::worker::amp_backup_dir().display()
+                )),
+            );
+            confirm.add_responses(&[("cancel", "Cancelar"), ("save", "Gravar")]);
+            confirm.set_response_appearance("save", adw::ResponseAppearance::Destructive);
+            let app = app.clone();
+            let dialog_c2 = dialog_c.clone();
+            confirm.connect_response(None, move |_, resp| {
+                if resp == "save" {
+                    app.send(Command::AmpSave { slot, record: r.clone() });
+                    app.toast("Gravando o amp…");
                     dialog_c2.close();
                 }
             });

@@ -17,9 +17,17 @@ Source: a walk through M-EFCS 3.9.2314 on a phone connected to the pedal
   type 5 buffer, saves to a slot after a confirmation and a backup of that slot
   in `~/.local/share/tankmini/cab-backups/`.
 
+- **AMP model import** (`.am4data`, menu "Importar amp (.am4data)…"; CLI
+  `tankmini amp audition` / `amp save --yes`): the LMT block is computed by
+  our port of the app's GRU (bit exact); audition through the type 5 buffer
+  (verified on the device: identical to the app's upload); save to an AMP slot
+  after a confirmation and a backup in `~/.local/share/tankmini/amp-backups/`.
+
 ## Waiting on the owner
 
-- Ear test of the audition (does the pedal play the buffer at once?).
+- Ear test of the audition, IR and AMP (does the pedal play the buffer at
+  once? does an AM4 model sound right on firmware 004, whose own slots hold
+  AM2?).
   If not, drop the "Ouvir" button and look for the activation step.
 - First real slot save (flash). Backup first; restore path = save the backup
   file back (`cab save` accepts only WAV today — add `cab restore` if needed).
@@ -40,7 +48,6 @@ needs 6 GB RAM), Community (vendor forum behind a login).
 
 ## Not done
 
-- AMP model files (`.am4data` / `.am3data`): header only partly mapped;
-  needs the same capture-and-read-back approach as the IRs.
+- AMP models: AM2/AM3 files are not supported (only AM4).
 - NAM import: the official app converts on the vendor's server; not
   reproducible offline.
