@@ -52,7 +52,7 @@ headerbar.tm-header {
   border-radius: 999px;
   background: @tm_surface;
   border: 1px solid @tm_hair;
-  min-height: 34px;
+  min-height: 30px;
 }
 .tm-rail list { background: transparent; }
 .tm-rail list > row {
@@ -120,7 +120,7 @@ headerbar.tm-header {
 }
 .tm-card.off { opacity: 0.5; }
 .tm-card-head { padding: 14px 16px 6px 18px; }
-.tm-card-body { padding: 4px 14px 12px 14px; }
+.tm-card-body { padding: 4px 8px 10px 8px; }
 .tm-family { min-width: 10px; min-height: 10px; border-radius: 99px; }
 .fam-fx  { background: @tm_fam_fx; }
 .fam-amp { background: @tm_fam_amp; }

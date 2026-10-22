@@ -250,6 +250,8 @@ pub fn build(app: &AppRef) {
     window.set_content(Some(&toasts));
 
     if std::env::var_os("TM_DEBUG_MEASURE").is_some() {
+        let split_c = split.clone();
+        let win_c = window.clone();
         let probes: Vec<(&str, gtk::Widget)> = vec![
             ("actions", actions.clone().upcast()),
             ("header", header.clone().upcast()),
@@ -263,14 +265,24 @@ pub fn build(app: &AppRef) {
             for (name, w) in probes {
                 let (min, nat, _, _) = w.measure(gtk::Orientation::Horizontal, -1);
                 eprintln!("[measure] {name}: min={min} natural={nat}");
+                if name == "split" {
+                    eprintln!(
+                        "[measure] split.collapsed={} window_width={}",
+                        split_c.is_collapsed(),
+                        win_c.width()
+                    );
+                }
             }
         });
     }
 
     // Narrow windows: the sidebar becomes an overlay.
+    // Collapse the rail earlier than Adwaita's default: at ~1000 px the board wins
+    // more from the extra width (three columns) than the list does from being
+    // permanently visible.
     let bp = adw::Breakpoint::new(adw::BreakpointCondition::new_length(
         adw::BreakpointConditionLengthType::MaxWidth,
-        900.0,
+        1000.0,
         adw::LengthUnit::Sp,
     ));
     bp.add_setter(&split, "collapsed", Some(&true.to_value()));

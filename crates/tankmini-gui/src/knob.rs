@@ -21,6 +21,8 @@ pub enum KnobSize {
     Regular,
     /// Compact knob for grid cards, where horizontal room is scarce.
     Compact,
+    /// Smallest knob: fits two per column in a dense board card.
+    Mini,
     Large,
     /// A stompbox knob: black cap, printed scale, label printed below.
     Pedal,
@@ -31,6 +33,7 @@ impl KnobSize {
         match self {
             KnobSize::Regular => (84, 104, 1.0),
             KnobSize::Compact => (68, 86, 1.0),
+            KnobSize::Mini => (52, 66, 1.0),
             KnobSize::Large => (148, 178, 1.75),
             KnobSize::Pedal => (106, 134, 1.0),
         }

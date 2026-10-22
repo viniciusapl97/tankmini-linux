@@ -16,7 +16,7 @@ pub fn refresh(app: &AppRef) {
     clear(root);
     app.ui().bytes_view.replace(None);
     let page = vbox(0);
-    page.set_margin_top(22);
+    page.set_margin_top(20);
     page.set_margin_bottom(36);
     page.set_margin_start(28);
     page.set_margin_end(28);
@@ -400,23 +400,6 @@ pub(crate) fn set_variant(app: &AppRef, module: usize, v: u8) {
     app.edit(None, Redraw::Views, |t, i| {
         t.set_unit(i, module, v);
     });
-}
-
-fn variant_dropdown(app: &AppRef, module: usize) -> Option<gtk::DropDown> {
-    let st = app.state.borrow();
-    let role = Role::for_slot(module);
-    let unit = st.current()?.unit(module);
-    let labels = variant_labels(&st, role);
-    if labels.len() < 2 {
-        return None;
-    }
-    let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
-    let dropdown = gtk::DropDown::from_strings(&refs);
-    dropdown.set_selected((unit as u32).min(labels.len() as u32 - 1));
-    dropdown.set_enable_search(labels.len() > 8);
-    let app = app.clone();
-    dropdown.connect_selected_notify(move |dd| set_variant(&app, module, dd.selected() as u8));
-    Some(dropdown)
 }
 
 /// One knob per parameter of a module (unnamed ones only when asked for).

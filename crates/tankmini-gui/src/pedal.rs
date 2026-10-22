@@ -29,12 +29,39 @@ pub fn pedal(app: &AppRef, position: usize, module: usize, realistic: bool) -> g
 
     // Above the pedal, on the "board": order, role and the block tools.
     let top = hbox(6);
-    let order = label(&format!("{} · {}", position + 1, role.label().to_uppercase()), &["tm-eyebrow"]);
+    let heading = if realistic {
+        format!("{} · {}", position + 1, role.label().to_uppercase())
+    } else {
+        format!("{}", position + 1)
+    };
+    let order = label(&heading, &["tm-eyebrow"]);
     order.set_hexpand(true);
     order.set_valign(gtk::Align::Center);
-    order.set_tooltip_text(Some(role.description()));
+    order.set_tooltip_text(Some(&format!(
+        "{} · {} — {}",
+        position + 1,
+        role.label(),
+        role.description()
+    )));
     top.append(&order);
     top.append(&block_tools(app, position, module));
+    // The on/off switch lives in the card header: inside the body it cost about
+    // 70 px of height per card, which is what pushed the board past a screen.
+    if !realistic {
+        let switch = gtk::Switch::new();
+        switch.set_active(on);
+        switch.set_valign(gtk::Align::Center);
+        switch.add_css_class("tm-card-switch");
+        switch.set_tooltip_text(Some("Ligar/desligar este bloco"));
+        let app_sw = app.clone();
+        switch.connect_state_set(move |_, value| {
+            app_sw.edit(None, Redraw::Views, |t, i| {
+                t.set_on(i, module, value);
+            });
+            gtk::glib::Propagation::Proceed
+        });
+        top.append(&switch);
+    }
     slot.append(&top);
 
     // Enclosure.
@@ -51,7 +78,7 @@ pub fn pedal(app: &AppRef, position: usize, module: usize, realistic: bool) -> g
     }
     // Narrower minimum so the board can reflow to two or one column on small
     // windows instead of forcing a horizontal overflow.
-    body.set_size_request(if realistic { 260 } else { 230 }, -1);
+    body.set_size_request(if realistic { 260 } else { 196 }, -1);
     // Let the card take the width its column gives it, so the board fills the
     // page instead of leaving a dead band on the right.
     body.set_hexpand(true);
@@ -71,12 +98,12 @@ pub fn pedal(app: &AppRef, position: usize, module: usize, realistic: bool) -> g
         }
     }
     led.set_halign(gtk::Align::Center);
-    led.set_margin_top(16);
+    led.set_margin_top(if realistic { 16 } else { 4 });
     led.set_tooltip_text(Some(if on { "Ligado" } else { "Desligado" }));
     body.append(&led);
 
     // Knobs.
-    let knobs = param_knobs(app, module, if realistic { KnobSize::Pedal } else { KnobSize::Regular });
+    let knobs = param_knobs(app, module, if realistic { KnobSize::Pedal } else { KnobSize::Mini });
     if knobs.is_empty() {
         let none = label("sem ajustes", &["tm-pedal-print", "tm-pedal-role"]);
         none.set_halign(gtk::Align::Center);
@@ -87,8 +114,16 @@ pub fn pedal(app: &AppRef, position: usize, module: usize, realistic: bool) -> g
         grid.set_halign(gtk::Align::Center);
         grid.set_column_spacing(4);
         grid.set_row_spacing(2);
-        grid.set_margin_top(8);
-        let cols = if knobs.len() == 4 { 2 } else { 3.min(knobs.len()) };
+        grid.set_margin_top(if realistic { 8 } else { 4 });
+        // Two knob rows for every block keeps the cards the same height, which is
+        // what lets two rows of cards fit without scrolling.
+        let cols = if realistic {
+            if knobs.len() == 4 { 2 } else { 3.min(knobs.len()) }
+        } else if knobs.len() == 4 {
+            2
+        } else {
+            3.min(knobs.len())
+        };
         for (i, k) in knobs.iter().enumerate() {
             grid.attach(k.widget(), (i % cols) as i32, (i / cols) as i32, 1, 1);
         }
@@ -99,17 +134,21 @@ pub fn pedal(app: &AppRef, position: usize, module: usize, realistic: bool) -> g
     let logo = gtk::MenuButton::new();
     logo.add_css_class("tm-pedal-logo");
     logo.set_halign(gtk::Align::Center);
-    logo.set_margin_top(14);
+    logo.set_margin_top(if realistic { 14 } else { 4 });
     let logo_box = vbox(0);
     let title = label(&name, &[if realistic { "tm-pedal-name" } else { "tm-title-l" }]);
     title.set_xalign(0.5);
     title.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    title.set_max_width_chars(16);
+    // A long model name must not widen the whole card: the board columns depend on
+    // the widest card, so the name ellipsizes to a fixed budget.
+    title.set_max_width_chars(if realistic { 16 } else { 10 });
     logo_box.append(&title);
     let sub_row = hbox(4);
     sub_row.set_halign(gtk::Align::Center);
     let role_class = if realistic { "tm-pedal-role" } else { "tm-eyebrow" };
-    sub_row.append(&label(&role.label().to_uppercase(), &[role_class]));
+    if realistic {
+        sub_row.append(&label(&role.label().to_uppercase(), &[role_class]));
+    }
     if labels.len() > 1 {
         let arrow = gtk::Image::from_icon_name("pan-down-symbolic");
         arrow.add_css_class(role_class);
@@ -128,20 +167,7 @@ pub fn pedal(app: &AppRef, position: usize, module: usize, realistic: bool) -> g
     body.append(&logo);
 
     if !realistic {
-        let switch = gtk::Switch::new();
-        switch.set_active(on);
-        switch.set_halign(gtk::Align::Center);
-        switch.set_margin_top(16);
-        switch.set_margin_bottom(20);
-        switch.set_tooltip_text(Some("Ligar/desligar este bloco"));
-        let app = app.clone();
-        switch.connect_state_set(move |_, value| {
-            app.edit(None, Redraw::Views, |t, i| {
-                t.set_on(i, module, value);
-            });
-            gtk::glib::Propagation::Proceed
-        });
-        body.append(&switch);
+        body.set_margin_bottom(8);
         slot.append(&body);
         return slot;
     }
@@ -244,10 +270,14 @@ pub fn board(app: &AppRef, realistic: bool) -> gtk::FlowBox {
     let flow = gtk::FlowBox::new();
     flow.set_selection_mode(gtk::SelectionMode::None);
     flow.set_homogeneous(true);
-    flow.set_min_children_per_line(1);
-    flow.set_max_children_per_line(6);
-    flow.set_column_spacing(14);
-    flow.set_row_spacing(18);
+    // The board is a three-across pedalboard when the window allows it; below that
+    // the cards keep shrinking instead of dropping to two columns, which is what
+    // keeps all six blocks on one screen.
+    let columns = if realistic { 1 } else { 3 };
+    flow.set_min_children_per_line(columns);
+    flow.set_max_children_per_line(if realistic { 6 } else { 3 });
+    flow.set_column_spacing(6);
+    flow.set_row_spacing(8);
     flow.set_valign(gtk::Align::Start);
     // Fill the page instead of shrinking to a centred natural width: this is what
     // lets the board use a third column once there is room for it.
@@ -264,8 +294,22 @@ pub fn board(app: &AppRef, realistic: bool) -> gtk::FlowBox {
     }
     if std::env::var_os("TM_DEBUG_MEASURE").is_some() {
         if let Some(card) = first {
+            let flow_c = flow.clone();
             gtk::glib::idle_add_local_once(move || {
+                eprintln!(
+                    "[measure] board flow width={} alloc={}",
+                    flow_c.width(),
+                    flow_c.allocated_width()
+                );
                 let (cmin, cnat, _, _) = card.measure(gtk::Orientation::Horizontal, -1);
+                let mut widest = 0;
+                let mut child = flow_c.first_child();
+                while let Some(c) = child {
+                    let (m, _, _, _) = c.measure(gtk::Orientation::Horizontal, -1);
+                    widest = widest.max(m);
+                    child = c.next_sibling();
+                }
+                eprintln!("[measure] widest card min={widest}");
                 let (hmin, _, _, _) = card.measure(gtk::Orientation::Vertical, 300);
                 eprintln!("[measure] card: min_w={cmin} nat_w={cnat} min_h_at300={hmin}");
             });
