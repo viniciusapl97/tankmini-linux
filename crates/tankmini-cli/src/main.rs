@@ -122,12 +122,24 @@ enum Command {
         /// Keep running until Ctrl+C instead of stopping after the first stable note
         #[arg(long = "watch")]
         watch: bool,
+        /// Use the pedal's own tuner instead of the audio input
+        #[arg(long)]
+        pedal: bool,
+        /// With --pedal: output volume while tuning (0 = mute, 100 = unchanged)
+        #[arg(long)]
+        volume: Option<u8>,
+        /// With --pedal: how long to run, in seconds
+        #[arg(long, default_value_t = 20)]
+        seconds: u64,
+        /// With --pedal: print the raw 6 bytes too
+        #[arg(long)]
+        raw: bool,
     },
 }
 
 /// Cabinet slots live in type 5 at `0x70028000 + slot * 0x1000` (4096 bytes each),
-/// per `docs/protocol/app-findings.md`. Reading them is safe; writing is not
-/// implemented because the AM2 container format is still unknown.
+/// per `docs/protocol/app-findings.md`. Reading and auditioning are RAM only;
+/// `save` writes flash and asks for `--yes`.
 #[derive(Subcommand)]
 enum CabOp {
     /// List the 20 cabinet slots with their name on the pedal
@@ -137,6 +149,32 @@ enum CabOp {
         /// Slot 0-19
         slot: usize,
         file: PathBuf,
+    },
+    /// Convert a WAV IR and put it in the pedal's audition buffer (RAM only)
+    Audition {
+        file: PathBuf,
+        /// Cab level 0-127
+        #[arg(long, default_value_t = tankmini_core::ir::DEFAULT_LEVEL)]
+        level: u8,
+        /// Name shown on the pedal (14 characters); the file name by default
+        #[arg(long)]
+        name: Option<String>,
+        /// Also write the converted record to this file
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+    /// Convert a WAV IR and store it in a CAB slot (writes flash)
+    Save {
+        /// Slot 0-19 (replaces the cab stored there)
+        slot: u8,
+        file: PathBuf,
+        #[arg(long, default_value_t = tankmini_core::ir::DEFAULT_LEVEL)]
+        level: u8,
+        #[arg(long)]
+        name: Option<String>,
+        /// Confirm the flash write
+        #[arg(long)]
+        yes: bool,
     },
 }
 
@@ -752,6 +790,60 @@ fn run(cli: Cli) -> Result<(), String> {
                 })
                 .unwrap_or_default();
             match op {
+                CabOp::Audition { file, level, name, out } => {
+                    use tankmini_core::ir;
+                    let wav = ir::parse_wav(&std::fs::read(&file).map_err(|e| e.to_string())?)?;
+                    let name = name.unwrap_or_else(|| ir::name_from_path(&file));
+                    let record = ir::record(&name, level, &wav);
+                    if let Some(out) = out {
+                        std::fs::write(&out, &record).map_err(|e| e.to_string())?;
+                    }
+                    let ok = pedal.cab_upload(&record).map_err(|e| e.to_string())?;
+                    println!(
+                        "{} ({} Hz, {} canal(is), {} amostras) -> buffer: {}",
+                        name,
+                        wav.rate,
+                        wav.channels,
+                        wav.samples.len(),
+                        if ok { "ok, conferido" } else { "FALHOU" }
+                    );
+                    if !ok {
+                        return Err("a pedaleira não confirmou o envio".into());
+                    }
+                }
+                CabOp::Save { slot, file, level, name, yes } => {
+                    use tankmini_core::ir;
+                    if slot as usize >= ir::SLOT_COUNT {
+                        return Err("slot deve ser 0-19".into());
+                    }
+                    let wav = ir::parse_wav(&std::fs::read(&file).map_err(|e| e.to_string())?)?;
+                    let name = name.unwrap_or_else(|| ir::name_from_path(&file));
+                    let record = ir::record(&name, level, &wav);
+                    let old = names.get(slot as usize).cloned().unwrap_or_default();
+                    if !yes {
+                        return Err(format!(
+                            "isto grava na memória da pedaleira e substitui o cab {slot} ({old}) por {name}. Repita com --yes."
+                        ));
+                    }
+                    let backup = tankmini_core::worker::cab_backup_dir();
+                    std::fs::create_dir_all(&backup).map_err(|e| e.to_string())?;
+                    if let Some(prev) = pedal.cab_slot(slot).map_err(|e| e.to_string())? {
+                        let stamp = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_secs())
+                            .unwrap_or(0);
+                        let f = backup.join(format!("cab{slot:02}-{stamp}.bin"));
+                        std::fs::write(&f, prev).map_err(|e| e.to_string())?;
+                        println!("backup do slot {slot} ({old}) em {}", f.display());
+                    } else {
+                        return Err("não consegui ler o slot atual para o backup; nada foi gravado".into());
+                    }
+                    if pedal.cab_save(slot, &record).map_err(|e| e.to_string())? {
+                        println!("cab {slot}: {name} gravado e conferido");
+                    } else {
+                        return Err("a gravação não conferiu".into());
+                    }
+                }
                 CabOp::List => {
                     println!("slot  nome            primeiros bytes");
                     for slot in 0..20usize {
@@ -811,7 +903,12 @@ fn run(cli: Cli) -> Result<(), String> {
             }
             Ok(())
         }
-        Command::Tune { a4, source, watch } => {
+        Command::Tune { a4, pedal: true, volume, seconds, raw, .. } => {
+            let (mut dev, _) = open_device(cli.dev.clone())?;
+            pedal_tune(&mut dev, a4, volume, seconds, raw).map_err(|e| e.to_string())?;
+            Ok(())
+        }
+        Command::Tune { a4, source, watch, .. } => {
             tune(a4, source, watch).map_err(|e| e.to_string())?;
             Ok(())
         }
@@ -867,6 +964,47 @@ fn pedal_source() -> Option<String> {
 }
 
 /// Capture 44.1 kHz mono f32 from the pedal and print the detected note.
+/// Run the pedal's tuner for `seconds`, printing each change, and always switch
+/// it off afterwards (a running tuner changes the output volume).
+fn pedal_tune(
+    pedal: &mut tankmini_core::Pedal,
+    a4: f32,
+    volume: Option<u8>,
+    seconds: u64,
+    raw: bool,
+) -> std::io::Result<()> {
+    use tankmini_core::tuner::{reference_byte, Reading, OFF_BYPASS_VOLUME, OFF_ENABLE, OFF_REFERENCE};
+    pedal.tuner_write(OFF_REFERENCE, reference_byte(a4.round() as u16))?;
+    if let Some(v) = volume {
+        pedal.tuner_write(OFF_BYPASS_VOLUME, v.min(100))?;
+    }
+    pedal.tuner_write(OFF_ENABLE, 1)?;
+    let end = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
+    let mut last: Option<Vec<u8>> = None;
+    let result = (|| {
+        while std::time::Instant::now() < end {
+            if let Some(bytes) = pedal.read(tankmini_core::region::DEV, tankmini_core::ADDR_TUNER, 6)? {
+                if last.as_ref() != Some(&bytes) {
+                    if let Some(r) = Reading::parse(&bytes) {
+                        let note = r.note_name().unwrap_or("—");
+                        let dev = r.deviation.map(|d| format!("{d:+}")).unwrap_or_default();
+                        if raw {
+                            println!("{note:<3} {dev:>5}   A4={} vol={}   {:02x?}", r.reference, r.bypass_volume, bytes);
+                        } else {
+                            println!("{note:<3} {dev:>5}");
+                        }
+                    }
+                    last = Some(bytes);
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(80));
+        }
+        Ok(())
+    })();
+    pedal.tuner_write(OFF_ENABLE, 0)?;
+    result
+}
+
 fn tune(a4: f32, source: Option<String>, watch: bool) -> Result<(), Box<dyn std::error::Error>> {
     use std::io::Read;
 

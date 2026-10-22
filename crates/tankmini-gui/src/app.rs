@@ -331,6 +331,20 @@ impl App {
 
     fn on_event(self: &AppRef, ev: Event) {
         match ev {
+            Event::Cab { slot, ok, message } => {
+                if slot.is_some() || !ok {
+                    self.toast(&message);
+                } else {
+                    self.toast("IR tocando na pedaleira");
+                }
+            }
+            Event::CabNames(names) => {
+                self.state.borrow_mut().cab_names = names;
+                self.refresh_all();
+            }
+            Event::Tuner(reading) => {
+                *self.ui().tuner.pedal.lock().unwrap() = Some(reading);
+            }
             Event::Connected { firmware, node, table, active, amp_names, cab_names, bypass } => {
                 let first = {
                     let mut st = self.state.borrow_mut();

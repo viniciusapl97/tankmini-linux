@@ -8,6 +8,7 @@ use adw::prelude::*;
 use gtk::{gio, glib};
 use tankmini_core::backup::BackupStore;
 use tankmini_core::catalog::Instrument;
+use tankmini_core::ir;
 use tankmini_core::patch::{PresetTable, PATCH_COUNT, SLOT_LABELS};
 use tankmini_core::templates;
 use tankmini_core::worker::Command;
@@ -446,9 +447,13 @@ pub fn export_preset(app: &AppRef) {
             .chars()
             .map(|c| if c.is_alphanumeric() || c == '-' { c } else { '-' })
             .collect();
-        (p.raw().to_vec(), format!("{name}.tankmini"))
+        (p.raw().to_vec(), format!("{name}.tkm"))
     };
-    let dialog = gtk::FileDialog::builder().title("Exportar preset").initial_name(&suggested).build();
+    let dialog = gtk::FileDialog::builder()
+        .title("Exportar preset")
+        .initial_name(&suggested)
+        .filters(&preset_filters())
+        .build();
     let app = app.clone();
     dialog.save(Some(&app.window.clone()), gio::Cancellable::NONE, move |res| {
         let Ok(file) = res else { return };
@@ -461,7 +466,10 @@ pub fn export_preset(app: &AppRef) {
 }
 
 pub fn import_preset(app: &AppRef) {
-    let dialog = gtk::FileDialog::builder().title("Importar preset (.tankmini ou tabela inteira)").build();
+    let dialog = gtk::FileDialog::builder()
+        .title("Importar preset ou todos os presets")
+        .filters(&preset_filters())
+        .build();
     let app = app.clone();
     dialog.open(Some(&app.window.clone()), gio::Cancellable::NONE, move |res| {
         let Ok(file) = res else { return };
@@ -485,6 +493,84 @@ pub fn import_preset(app: &AppRef) {
         });
         app.toast_undo("Importado. Confira e salve para gravar na pedaleira.");
     });
+}
+
+/// File types for presets: the official app's `.tkm` (one preset) and `.atkm`
+/// (all 21, the 1942-byte table), plus our older `.tankmini`. Import tells them
+/// apart by size, so the extension is only a hint.
+fn preset_filters() -> gio::ListStore {
+    let store = gio::ListStore::new::<gtk::FileFilter>();
+    let all = gtk::FileFilter::new();
+    all.set_name(Some("Presets TANK MINI (.tkm, .atkm)"));
+    for ext in ["tkm", "atkm", "tankmini", "bin"] {
+        all.add_suffix(ext);
+    }
+    store.append(&all);
+    let any = gtk::FileFilter::new();
+    any.set_name(Some("Todos os arquivos"));
+    any.add_pattern("*");
+    store.append(&any);
+    store
+}
+
+/// Export the whole table as an `.atkm`, the official app's "Share all presets".
+pub fn export_all(app: &AppRef) {
+    let Some(bytes) = app.state.borrow().table.as_ref().map(|t| t.raw().to_vec()) else {
+        return;
+    };
+    let dialog = gtk::FileDialog::builder()
+        .title("Exportar todos os presets")
+        .initial_name("TankMini-presets.atkm")
+        .filters(&preset_filters())
+        .build();
+    let app = app.clone();
+    dialog.save(Some(&app.window.clone()), gio::Cancellable::NONE, move |res| {
+        let Ok(file) = res else { return };
+        let Some(path) = file.path() else { return };
+        match std::fs::write(&path, &bytes) {
+            Ok(()) => app.toast(&format!("21 presets exportados para {}", path.display())),
+            Err(e) => app.toast(&format!("Falha ao exportar: {e}")),
+        }
+    });
+}
+
+/// Exchange the selected preset with another slot.
+pub fn swap_slots(app: &AppRef) {
+    let from = app.state.borrow().selected;
+    let dialog = adw::AlertDialog::new(
+        Some(&format!("Trocar {} de lugar com…", SLOT_LABELS[from])),
+        Some("Os dois presets trocam de posição. Nada é gravado até você salvar."),
+    );
+    let labels: Vec<String> = {
+        let st = app.state.borrow();
+        (0..PATCH_COUNT).map(|i| format!("{} · {}", SLOT_LABELS[i], st.title(i))).collect()
+    };
+    let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
+    let dd = gtk::DropDown::from_strings(&refs);
+    dd.set_selected(((from + 1) % PATCH_COUNT) as u32);
+    dialog.set_extra_child(Some(&dd));
+    dialog.add_responses(&[("cancel", "Cancelar"), ("swap", "Trocar")]);
+    dialog.set_response_appearance("swap", adw::ResponseAppearance::Suggested);
+    let window = app.window.clone();
+    let app = app.clone();
+    dialog.connect_response(None, move |_, r| {
+        if r != "swap" {
+            return;
+        }
+        let to = dd.selected() as usize;
+        if to == from {
+            app.toast("Escolha outro preset.");
+            return;
+        }
+        app.edit(None, Redraw::Views, |t, _| {
+            t.swap_patches(from, to);
+        });
+        app.toast_undo(&format!(
+            "{} e {} trocados. Use Salvar todos para gravar.",
+            SLOT_LABELS[from], SLOT_LABELS[to]
+        ));
+    });
+    dialog.present(Some(&window));
 }
 
 pub fn copy_slot(app: &AppRef) {
@@ -1269,4 +1355,160 @@ mod tests {
     fn single_letters_are_uppercased() {
         assert_eq!(pretty_accel("s"), "S");
     }
+}
+
+/// Import a cabinet IR from a WAV: convert it like the official app, let the
+/// user hear it on the pedal (audition buffer, RAM) and store it in one of the
+/// 20 CAB slots (flash, after a confirmation and a backup of that slot).
+pub fn import_ir(app: &AppRef) {
+    let filter = gtk::FileFilter::new();
+    filter.set_name(Some("IR em WAV"));
+    filter.add_suffix("wav");
+    filter.add_mime_type("audio/wav");
+    let filters = gio::ListStore::new::<gtk::FileFilter>();
+    filters.append(&filter);
+    let picker = gtk::FileDialog::builder().title("Escolher um IR (WAV)").filters(&filters).build();
+    let app = app.clone();
+    picker.open(Some(&app.window.clone()), gio::Cancellable::NONE, move |res| {
+        let Ok(file) = res else { return };
+        let Some(path) = file.path() else { return };
+        let wav = match std::fs::read(&path).map_err(|e| e.to_string()).and_then(|b| ir::parse_wav(&b)) {
+            Ok(w) => w,
+            Err(e) => {
+                app.toast(&format!("IR recusado: {e}"));
+                return;
+            }
+        };
+        ir_dialog(&app, &path, wav);
+    });
+}
+
+fn ir_dialog(app: &AppRef, path: &std::path::Path, wav: ir::Wav) {
+    let dialog = adw::Dialog::new();
+    dialog.set_title("Importar IR");
+    dialog.set_content_width(480);
+
+    let page = adw::PreferencesPage::new();
+    let group = adw::PreferencesGroup::new();
+    let seconds = wav.samples.len() as f64 / wav.rate as f64;
+    let used_ms = ir::SAMPLES as f64 * 1000.0 / ir::RATE as f64;
+    group.set_title(&path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
+    group.set_description(Some(&format!(
+        "{} Hz · {} canal(is) · {:.0} ms. A pedaleira usa os primeiros {:.0} ms, em mono a 44,1 kHz.",
+        wav.rate,
+        wav.channels,
+        seconds * 1000.0,
+        used_ms
+    )));
+    page.add(&group);
+
+    let name = adw::EntryRow::new();
+    name.set_title("Nome na pedaleira (até 14 letras)");
+    name.set_text(&ir::name_from_path(path));
+    group.add(&name);
+
+    let level = adw::SpinRow::with_range(0.0, 127.0, 1.0);
+    level.set_title("Volume do cab");
+    level.set_subtitle("O app oficial começa em 50");
+    level.set_value(ir::DEFAULT_LEVEL as f64);
+    group.add(&level);
+
+    let slots = adw::ComboRow::new();
+    slots.set_title("Guardar no lugar de");
+    let labels: Vec<String> = {
+        let st = app.state.borrow();
+        (0..ir::SLOT_COUNT)
+            .map(|i| format!("{} · {}", i + 1, st.cab_names.get(i).map(String::as_str).unwrap_or("—")))
+            .collect()
+    };
+    let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
+    slots.set_model(Some(&gtk::StringList::new(&refs)));
+    // The last slot is the least likely to be one people rely on.
+    slots.set_selected(ir::SLOT_COUNT as u32 - 1);
+    group.add(&slots);
+
+    let buttons = hbox(12);
+    buttons.set_halign(gtk::Align::End);
+    buttons.set_margin_top(12);
+    let listen = gtk::Button::with_label("Ouvir na pedaleira");
+    listen.add_css_class("tm-pill");
+    listen.set_tooltip_text(Some("Toca o IR na pedaleira sem gravar nada"));
+    let save = gtk::Button::with_label("Gravar no cab…");
+    save.add_css_class("tm-pill");
+    save.add_css_class("suggested-action");
+    buttons.append(&listen);
+    buttons.append(&save);
+    let actions = adw::PreferencesGroup::new();
+    actions.add(&buttons);
+    page.add(&actions);
+
+    let tv = adw::ToolbarView::new();
+    tv.add_top_bar(&adw::HeaderBar::new());
+    tv.set_content(Some(&page));
+    dialog.set_child(Some(&tv));
+
+    let wav = Rc::new(wav);
+    let record = {
+        let name = name.clone();
+        let level = level.clone();
+        let wav = wav.clone();
+        move || ir::record(name.text().trim(), level.value() as u8, &wav)
+    };
+    let online = {
+        let app = app.clone();
+        move || {
+            let ok = matches!(app.state.borrow().conn, Conn::Online);
+            if !ok {
+                app.toast("Conecte a pedaleira pelo USB primeiro.");
+            }
+            ok
+        }
+    };
+    {
+        let app = app.clone();
+        let record = record.clone();
+        let online = online.clone();
+        listen.connect_clicked(move |_| {
+            if online() {
+                app.send(Command::CabAudition(record()));
+            }
+        });
+    }
+    {
+        let app = app.clone();
+        let dialog_c = dialog.clone();
+        save.connect_clicked(move |_| {
+            if !online() {
+                return;
+            }
+            let slot = slots.selected() as u8;
+            let new_name = name.text().trim().to_string();
+            if new_name.is_empty() {
+                app.toast("Dê um nome ao IR.");
+                return;
+            }
+            let old = labels[slot as usize].clone();
+            let confirm = adw::AlertDialog::new(
+                Some(&format!("Substituir o cab {old}?")),
+                Some(&format!(
+                    "\"{new_name}\" é gravado na memória da pedaleira no lugar dele. Uma cópia do cab atual fica guardada em {} para voltar depois.",
+                    tankmini_core::worker::cab_backup_dir().display()
+                )),
+            );
+            confirm.add_responses(&[("cancel", "Cancelar"), ("save", "Gravar")]);
+            confirm.set_response_appearance("save", adw::ResponseAppearance::Destructive);
+            let app = app.clone();
+            let record = record.clone();
+            let dialog_c2 = dialog_c.clone();
+            confirm.connect_response(None, move |_, r| {
+                if r == "save" {
+                    app.send(Command::CabSave { slot, record: record() });
+                    app.toast("Gravando o IR…");
+                    dialog_c2.close();
+                }
+            });
+            confirm.present(Some(&dialog_c));
+        });
+    }
+    dialog.present(Some(&app.window.clone()));
 }

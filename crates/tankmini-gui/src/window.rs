@@ -81,8 +81,11 @@ pub fn build(app: &AppRef) {
     let s1 = gio::Menu::new();
     s1.append(Some("Salvar na biblioteca…"), Some("win.library-save"));
     s1.append(Some("Exportar preset…"), Some("win.export"));
+    s1.append(Some("Exportar todos os presets…"), Some("win.export-all"));
     s1.append(Some("Importar preset…"), Some("win.import"));
     s1.append(Some("Copiar para outro slot…"), Some("win.copy-slot"));
+    s1.append(Some("Trocar de lugar com…"), Some("win.swap-slots"));
+    s1.append(Some("Importar IR (cab)…"), Some("win.import-ir"));
     s1.append(Some("Renomear…"), Some("win.rename"));
     menu.append_section(None, &s1);
     let s2 = gio::Menu::new();
@@ -595,6 +598,9 @@ fn install_actions(app: &AppRef) {
     add("export", Box::new(crate::dialogs::export_preset));
     add("import", Box::new(crate::dialogs::import_preset));
     add("copy-slot", Box::new(crate::dialogs::copy_slot));
+    add("export-all", Box::new(crate::dialogs::export_all));
+    add("swap-slots", Box::new(crate::dialogs::swap_slots));
+    add("import-ir", Box::new(crate::dialogs::import_ir));
     add("rename", Box::new(crate::dialogs::rename));
     add("backups", Box::new(crate::dialogs::backups));
     add("factory", Box::new(crate::dialogs::factory));

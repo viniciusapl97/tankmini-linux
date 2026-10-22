@@ -23,6 +23,7 @@ use crate::Pedal;
 
 const PROBE_EVERY: Duration = Duration::from_millis(1500);
 const POLL_EVERY: Duration = Duration::from_millis(1000);
+const TUNER_EVERY: Duration = Duration::from_millis(80);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
@@ -41,7 +42,24 @@ pub enum Command {
     Save { slot: u8, bytes: Vec<u8> },
     /// Backup → write the whole table → verify → optional commit.
     WriteTable { table: PresetTable, commit: bool, note: String },
+    /// The pedal's own tuner (RAM controls only).
+    Tuner(TunerControl),
+    /// Put a CAB record ([`crate::ir::record`]) in the audition buffer (RAM).
+    CabAudition(Vec<u8>),
+    /// Back up CAB slot `slot`, then store `record` there (**flash**).
+    CabSave { slot: u8, record: Vec<u8> },
     Shutdown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TunerControl {
+    /// Start, and report [`Event::Tuner`] readings until `Off`.
+    On,
+    Off,
+    /// Reference A4 in Hz (430..450).
+    Reference(u16),
+    /// Output volume while tuning, 0..100.
+    BypassVolume(u8),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,6 +97,12 @@ pub enum Event {
     TableWritten { table: PresetTable, ok: bool, message: String },
     /// A USB exchange started (true) or finished (false).
     Busy(bool),
+    /// A reading from the pedal's tuner, while it is on.
+    Tuner(crate::tuner::Reading),
+    /// Result of `CabAudition` (`slot` = None) or `CabSave`.
+    Cab { slot: Option<u8>, ok: bool, message: String },
+    /// The cab names after a slot was rewritten.
+    CabNames(Vec<String>),
 }
 
 /// One write into the edit buffer. `settle` asks for a pause afterwards: the
@@ -201,6 +225,9 @@ struct Loop {
     last_probe: Option<Instant>,
     last_poll: Instant,
     last_disconnect: Option<Disconnect>,
+    /// The tuner was asked on; it is (re)started after a reconnect.
+    tuner: bool,
+    last_tuner: Instant,
 }
 
 impl Loop {
@@ -214,22 +241,29 @@ impl Loop {
             last_probe: None,
             last_poll: Instant::now(),
             last_disconnect: None,
+            tuner: false,
+            last_tuner: Instant::now(),
         }
     }
 
     fn run(mut self, rx: Receiver<Command>) {
         self.connect();
         loop {
-            let first = match rx.recv_timeout(Duration::from_millis(250)) {
+            let wait = if self.tuner { TUNER_EVERY } else { Duration::from_millis(250) };
+            let first = match rx.recv_timeout(wait) {
                 Ok(c) => Some(c),
                 Err(RecvTimeoutError::Timeout) => None,
-                Err(RecvTimeoutError::Disconnected) => return,
+                Err(RecvTimeoutError::Disconnected) => {
+                    self.stop_tuner();
+                    return;
+                }
             };
             if let Some(first) = first {
                 let mut batch = vec![first];
                 batch.extend(rx.try_iter());
                 for cmd in coalesce(batch) {
                     if cmd == Command::Shutdown {
+                        self.stop_tuner();
                         return;
                     }
                     (self.emit)(Event::Busy(true));
@@ -252,6 +286,17 @@ impl Loop {
             }
             return;
         }
+        if self.tuner && self.last_tuner.elapsed() >= TUNER_EVERY {
+            self.last_tuner = Instant::now();
+            match self.pedal.as_mut().map(|p| p.tuner()) {
+                Some(Ok(Some(r))) => (self.emit)(Event::Tuner(r)),
+                Some(Err(e)) => {
+                    self.drop_connection(e);
+                    return;
+                }
+                _ => {}
+            }
+        }
         if self.last_poll.elapsed() >= POLL_EVERY {
             self.last_poll = Instant::now();
             let polled = self.pedal.as_mut().map(|p| p.glob());
@@ -260,6 +305,16 @@ impl Loop {
                 Some(Ok(None)) => {}
                 Some(Err(e)) => self.drop_connection(e),
                 None => {}
+            }
+        }
+    }
+
+    /// Leave the pedal's tuner off, so the pedal never stays muted after we quit.
+    fn stop_tuner(&mut self) {
+        if self.tuner {
+            self.tuner = false;
+            if let Some(p) = self.pedal.as_mut() {
+                let _ = p.tuner_write(crate::tuner::OFF_ENABLE, 0);
             }
         }
     }
@@ -331,6 +386,9 @@ impl Loop {
                 self.shadow = None;
                 self.last_disconnect = None;
                 self.last_poll = Instant::now();
+                if self.tuner {
+                    let _ = pedal.tuner_write(crate::tuner::OFF_ENABLE, 1);
+                }
                 self.pedal = Some(pedal);
                 (self.emit)(Event::Connected { firmware, node, table, active, amp_names, cab_names, bypass });
             }
@@ -363,6 +421,15 @@ impl Loop {
                 Command::Save { slot, bytes } => (self.emit)(Event::Saved { slot, ok: false, message: offline, bytes }),
                 Command::WriteTable { table, .. } => {
                     (self.emit)(Event::TableWritten { table, ok: false, message: offline })
+                }
+                // Remembered, so the tuner starts as soon as the pedal is back.
+                Command::Tuner(TunerControl::On) => self.tuner = true,
+                Command::Tuner(TunerControl::Off) => self.tuner = false,
+                Command::CabAudition(_) => {
+                    (self.emit)(Event::Cab { slot: None, ok: false, message: offline })
+                }
+                Command::CabSave { slot, .. } => {
+                    (self.emit)(Event::Cab { slot: Some(slot), ok: false, message: offline })
                 }
                 _ => {}
             }
@@ -456,9 +523,71 @@ impl Loop {
                 };
                 (self.emit)(Event::TableWritten { table, ok, message });
             }
+            Command::Tuner(control) => {
+                use crate::tuner::{reference_byte, OFF_BYPASS_VOLUME, OFF_ENABLE, OFF_REFERENCE};
+                let pedal = self.pedal.as_mut().expect("checked");
+                match control {
+                    TunerControl::On => {
+                        pedal.tuner_write(OFF_ENABLE, 1)?;
+                        self.tuner = true;
+                    }
+                    TunerControl::Off => {
+                        pedal.tuner_write(OFF_ENABLE, 0)?;
+                        self.tuner = false;
+                    }
+                    TunerControl::Reference(hz) => {
+                        pedal.tuner_write(OFF_REFERENCE, reference_byte(hz))?;
+                    }
+                    TunerControl::BypassVolume(v) => {
+                        pedal.tuner_write(OFF_BYPASS_VOLUME, v.min(100))?;
+                    }
+                }
+            }
+            Command::CabAudition(record) => {
+                let ok = self.pedal.as_mut().expect("checked").cab_upload(&record)?;
+                let message = if ok { "IR enviado para a pedaleira" } else { "a pedaleira não confirmou o IR" };
+                (self.emit)(Event::Cab { slot: None, ok, message: message.into() });
+            }
+            Command::CabSave { slot, record } => {
+                let pedal = self.pedal.as_mut().expect("checked");
+                let (ok, message) = match save_cab(pedal, slot, &record)? {
+                    Ok(path) => (true, format!("IR gravado no cab {} (backup em {})", slot + 1, path.display())),
+                    Err(e) => (false, e),
+                };
+                (self.emit)(Event::Cab { slot: Some(slot), ok, message });
+                if ok {
+                    let names = self.pedal.as_mut().expect("checked").cab_names()?;
+                    (self.emit)(Event::CabNames(names));
+                }
+            }
             Command::Shutdown => {}
         }
         Ok(())
+    }
+}
+
+/// Where CAB slot backups go (one 4096-byte file per save).
+pub fn cab_backup_dir() -> std::path::PathBuf {
+    crate::paths::data_dir().join("cab-backups")
+}
+
+/// Keep a copy of the slot, then save. The inner error is for the user.
+fn save_cab(pedal: &mut Pedal, slot: u8, record: &[u8]) -> io::Result<Result<std::path::PathBuf, String>> {
+    let Some(previous) = pedal.cab_slot(slot)? else {
+        return Ok(Err("não consegui ler o cab atual para o backup; nada foi gravado".into()));
+    };
+    let dir = cab_backup_dir();
+    std::fs::create_dir_all(&dir)?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let path = dir.join(format!("cab{slot:02}-{stamp}.bin"));
+    std::fs::write(&path, previous)?;
+    if pedal.cab_save(slot, record)? {
+        Ok(Ok(path))
+    } else {
+        Ok(Err(format!("a gravação não conferiu (backup em {})", path.display())))
     }
 }
 

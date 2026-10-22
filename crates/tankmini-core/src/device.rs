@@ -7,7 +7,7 @@ use crate::preset::{Preset, PRESET_LEN};
 use crate::region;
 use crate::transport::Transport;
 use crate::{
-    cmd, ADDR_ACTIVE_SLOT, ADDR_AMP_NAMES, ADDR_BYPASS, ADDR_GLOB, ADDR_LOOPBACK, ADDR_CAB_NAMES, ADDR_EDIT, ADDR_PRESET, ADDR_SLOT_SELECT, CAB_NAME_COUNT,
+    cmd, ADDR_ACTIVE_SLOT, ADDR_AMP_NAMES, ADDR_BYPASS, ADDR_GLOB, ADDR_LOOPBACK, ADDR_CAB_NAMES, ADDR_EDIT, ADDR_PRESET, ADDR_SLOT_SELECT, ADDR_TUNER, CAB_NAME_COUNT,
     CAB_NAME_LEN,
 };
 
@@ -136,6 +136,18 @@ impl Pedal {
         Ok(self.write(region::DEV, ADDR_LOOPBACK, &[u8::from(on)])? == Some(0))
     }
 
+    /// One tuner reading (see [`crate::tuner`]).
+    pub fn tuner(&mut self) -> std::io::Result<Option<crate::tuner::Reading>> {
+        Ok(self
+            .read(region::DEV, ADDR_TUNER, 6)?
+            .and_then(|v| crate::tuner::Reading::parse(&v)))
+    }
+
+    /// Write one tuner control byte (`crate::tuner::OFF_*`).
+    pub fn tuner_write(&mut self, offset: u32, value: u8) -> std::io::Result<bool> {
+        Ok(self.write(region::DEV, ADDR_TUNER + offset, &[value])? == Some(0))
+    }
+
     pub fn select_slot(&mut self, slot: u8) -> std::io::Result<bool> {
         let ack = self.write(region::DEV, ADDR_SLOT_SELECT + slot as u32, &[slot])?;
         Ok(ack == Some(0))
@@ -177,6 +189,70 @@ impl Pedal {
 
     /// Cab names: 20 entries of 14 bytes at `USR` `0x80000000`,
     /// NUL padded (verified: 280 bytes ends exactly after the 20th name).
+    /// Put a CAB record (see [`crate::ir`]) into the pedal's type 5 buffer,
+    /// where the official app puts it to audition and before saving. RAM only.
+    /// Returns whether the read-back matches.
+    pub fn cab_upload(&mut self, record: &[u8]) -> std::io::Result<bool> {
+        // Small exchanges only: one 3092-byte read of this buffer left the
+        // pedal's USB side hung until a power cycle (2026-10-22). 128-byte
+        // writes and 512-byte reads are what was tested.
+        const CHUNK: usize = 128;
+        for (i, part) in record.chunks(CHUNK).enumerate() {
+            let addr = crate::ir::ADDR_BUFFER + (i * CHUNK) as u32;
+            if self.write(region::USR, addr, part)? != Some(0) {
+                return Ok(false);
+            }
+        }
+        let mut back = Vec::with_capacity(record.len());
+        for off in (0..record.len()).step_by(512) {
+            let n = 512.min(record.len() - off);
+            match self.read(region::USR, crate::ir::ADDR_BUFFER + off as u32, n)? {
+                Some(part) => back.extend(part),
+                None => return Ok(false),
+            }
+        }
+        Ok(back == record)
+    }
+
+    /// One stored CAB slot (4096 bytes).
+    pub fn cab_slot(&mut self, slot: u8) -> std::io::Result<Option<Vec<u8>>> {
+        let addr = crate::ir::ADDR_SLOTS + slot as u32 * crate::ir::SLOT_LEN as u32;
+        let mut out = Vec::with_capacity(crate::ir::SLOT_LEN);
+        for off in (0..crate::ir::SLOT_LEN).step_by(512) {
+            match self.read(region::USR, addr + off as u32, 512)? {
+                Some(part) => out.extend(part),
+                None => return Ok(None),
+            }
+        }
+        Ok(Some(out))
+    }
+
+    /// Store the buffer into CAB slot `slot` (**writes flash**), the way the app
+    /// does it: rewrite the header with the final name and level, then
+    /// `WRITE 0xF0000100 + slot [0]`. Verified by reading the slot back
+    /// until it starts with `record` (up to 5 s).
+    pub fn cab_save(&mut self, slot: u8, record: &[u8]) -> std::io::Result<bool> {
+        if slot as usize >= crate::ir::SLOT_COUNT || record.len() != crate::ir::RECORD_LEN {
+            return Ok(false);
+        }
+        if !self.cab_upload(record)? {
+            return Ok(false);
+        }
+        if self.write(region::USR, crate::ir::ADDR_SAVE_CAB + slot as u32, &[0])? != Some(0) {
+            return Ok(false);
+        }
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(200));
+            if let Some(stored) = self.cab_slot(slot)? {
+                if stored.starts_with(record) {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
+    }
+
     pub fn cab_names(&mut self) -> std::io::Result<Vec<String>> {
         self.name_table(ADDR_CAB_NAMES)
     }

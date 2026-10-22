@@ -275,9 +275,11 @@ Checked by reading the asset:
     (e.g. `400,-9,4`, `600,-12,12`, `2500,…`; **inferred**)
   - model data up to +0x183b
 - **20 CAB records × 0x1000** at `0x28000..0x3BFFF`. Each record is
-  `"CAB\0" name[14] 01 <level>` + 4076 bytes of data. The data does not decode
-  as plain 24-bit PCM (repeating `a b a` byte triplets), so the stored format
-  may differ from what the app streams for previews. **Unknown.**
+  `"CAB\0" name[14] <format> <level>` + **1024 samples of plain 24-bit LE
+  PCM** (3072 bytes, rest zero). Format is `01` in the am3 blob, `02` in am4.
+  All factory IRs are peak-normalized to about full scale. (An earlier note
+  here said the data did not decode as PCM; the `a b a` byte triplets are just
+  the shape of those IRs. Corrected 2026-10-22, see §12.)
 
 Factory restore of this blob is `FlashWriter.run(type 5, 0x70000000, blob)`
 (§6). So the slot storage is presumably:
@@ -372,3 +374,110 @@ asm. By the JieLi convention, AE41 is write and AE42 is notify. **inferred**
   **AMP** names are at type 5 `0x90000000`.
 - Live editing should target the **edit buffer at type 4 `0x10000000`**, not
   the preset table at `0x0000`.
+
+## 11. Second pass (2026-10-22): app v3.9.2314 on a real phone + pedal over BLE
+
+The installed app (S24, `com.digAmp.m_efcs` 3.9.2314, split APK) was driven
+over adb while connected to the pedal by BLE. Screens were observed;
+everything below about bytes is still **from app** (static) unless marked.
+
+### 11.1 Tuner (corrects §7: there IS a tuner for TANK MINI)
+
+`data/tuner_controller.dart`, `TunerController`. Block at **type 4
+`0x70100000`**, single-byte writes to `0x70100000 + offset`:
+
+| Offset | Dir | Meaning | Evidence |
+|---|---|---|---|
+| 0 | R/W | Bypass volume while tuning, 0..100 | `setBypassVolume` clamps Smi 0..200 → 0..100, `_writeByte(0, v)` |
+| 1 | R/W | Reference pitch as signed offset from 440 Hz (430..450) | `setReferenceHz` clamps 430..450, writes `v - 440` (`sub #0x1b8`); `_poll` decodes `(b & 0x7f) - (b & 0x80) + 440` |
+| 2 | W | Tuner on = `1` (written by `start`); `dispose` writes `0x70100002` again (off, **inferred** `0`) | `start`: `_writeByte(2, 1)` |
+| 3 | R | `1` while the tuner runs | **verified** |
+| 4 | R | Note: 1 = G#, 2 = A … 12 = G; `0` = signal, no stable note; `0xFF` = silent | **verified** (open A → 2, open D → 7) |
+| 5 | R | Deviation, 127 = centre; app's in-tune window 118..=136 | **verified** direction (flat < 127); unit not calibrated |
+
+`_poll`: READ type 4 `0x70100000` len 6 on a periodic timer, only while
+the tuner dialog is open. Enable (`2 ← 1`), disable (`2 ← 0`) and the idle read `64 00 ff 00 ff 00` are **verified** on the device (2026-10-22), as is the note mapping above with a guitar. UI: needle, ±50 cent scale, "NO SIGNAL", Reference
+440 Hz and Bypass Vol steppers.
+
+### 11.2 Preset files (Share / Import current, Share / Import all)
+
+- Product entry: extension **`.tkm`** (`register_products.dart:4495`).
+  "All presets" uses `".a" + ext` → **`.atkm`** (`allPresetsSuffix`).
+- Bank file = exactly the factory asset layout, **1942 bytes**: 21 × 92-byte
+  patches + `"PATCHEND\0\0"` trailer. Checked: the shipped
+  `tankMini_am4_preset.bin` and the 21 dumps in `captures/presets/` all end
+  in `50 41 54 43 48 45 4E 44 00 00`.
+- Import all (`_importPresetFile`): `PresetFiles.readBank` (length must match
+  `_bankLength(factorySize)`) → `PresetStore.writeBank` =
+  `writeDataWithProgress(type 4, addr 0, bytes)` → `PresetStore.save`
+  (commit `0xF0000000`) → reload names and the current preset.
+- Import current: `PresetFiles.readSingle` → one patch (92 bytes,
+  **inferred**: size check against the layout record) written into the
+  current slot, then save. Share current = `getCurrentPresetBytes`
+  (`toBytes` of the patch struct) named `<preset>_<name>.tkm`.
+- Swap preset: dialog with two positions → swaps two records in the table
+  and commits.
+- **No flash-erase involved**: these are the same table writes + commit our
+  app already does. Safe to port.
+
+### 11.3 AMP model files (Import → AMP tab, Community)
+
+- Accepted names match `\.am(\d+)(data)?$`, e.g. `.am4data`, `.am3data`
+  (`utils/amx_file_utils.dart amVersionOfName`). Community posts are tagged
+  `AM4DATA` / `AM3DATA`; the number is the amp-engine generation and must
+  match the pedal (factory blobs `am3` vs `am4`).
+- `AmpHead.fromBytes` / `fromAlignedBytes` (`ui/modules/import_amp_ds.dart`):
+  4-byte magic, 14-byte name, bytes 18..21 read individually, header 22 B
+  (aligned variant 24 B). Bytes 18..21 are most likely the default
+  Level/Gain range shown in the Import screen ("Level 100", "Gain 30–60")
+  (**inferred**).
+- The model body is a GRU network: `libamx_parser_lib.so` exports
+  `calc_bias_gru` / `calc_bias_gru_am4`, called before upload.
+- **NAM import is server-side**: `utils/nam_to_amx.dart` uploads the `.nam`
+  to `https://community.m-vave.com/bbs/api` (`uploadnam`, `namhash`) and
+  downloads a trained AM record. Not portable offline.
+- Upload path is §5.2 (preview buffer type 5 `0x0`, activate `0xA0000000
+  [1]`, save `0xF0000000 + s`). Writes flash slots → owner go-ahead needed.
+
+### 11.4 Screen inventory (for UI ideas)
+
+Param tab: preset picker (1A..7C), Sync, Save, Save to, BYPASS, Loopback,
+More (share/import current, swap, share/import all, factory restore,
+tuner), VOL bar, signal chain as 6 tiles in two rows with arrows, one
+expanded block card below (model dropdown + on switch + knobs).
+Import tab: AMP / CAB segmented; "Load AMX/CAB File to List", "Save to
+Device", Level (and Gain range for AMP) bars, search + Edit over a local
+file list. Audio separator tab (stem separation of WAV/MP3/MP4; ≥6 GB RAM
+warning). Community tab: web forum with AM4DATA/AM3DATA amp captures,
+likes/downloads, Login/Publish.
+
+## 12. CAB (IR) import on firmware `TANK MINI_004` (2026-10-22, on the device)
+
+Captured by letting the official app (3.9.2314, BLE) audition a WAV, then
+reading the pedal over USB. **verified** unless marked.
+
+- **No preview capability.** READ type 5 `0xB0000000` (and `0xD0000000`,
+  `0xA0000000`) returns junk left in the reply buffer (fragments of the
+  firmware string and cab names), never the 24-byte capability of §5. So the
+  app takes its legacy path (`ModelPreview.probe` → null).
+- **Audition = one write of the record to type 5 `0x00000000`.** After the
+  app's Audition the buffer held `"CAB\0"`, 14 zero bytes (no name yet), `01`,
+  `32` (level 50 = the app's "CAB Level"), then the WAV's samples. No
+  activation write was seen in the static path (`0xA0000000` is preview-only).
+  Whether the pedal *plays* the buffer right away is **not confirmed by ear**.
+- The app's conversion (`WaveUtils.conversionMono24Bit`): average channels,
+  Kaiser-sinc resample to 44.1 kHz (β 8.6), scale floats to 24-bit and clamp,
+  **no normalization**. `tankmini-core::ir` reproduces it: for a 24-bit
+  44.1 kHz mono file our record is byte-identical to the app's (3092 bytes).
+- Legacy sample budget in `sendCabFileData` is 6144 bytes when the probe fails,
+  but a slot is 4096 bytes; we send 1024 samples (3072 bytes), what the slots
+  and the app's upload both hold.
+- **Save** (`_executeSave` → `ResourceSaveController.save`, base
+  `0xF0000100`): rewrite the 20-byte header at type 5 `0x0` with the final
+  name, then WRITE type 5 `0xF0000100 + slot` `[0]`. **from app; not run yet.**
+  Our `Pedal::cab_save` verifies by reading the slot back from
+  `0x70028000 + slot*0x1000` (reads **verified** to match the factory blob).
+- **Transfer limits.** One READ of 3092 bytes from type 5 `0x0` hung the
+  pedal's USB side (`rawmidi drain error`, then `device descriptor read/64,
+  error -110` on replug) until a full power cycle. 128-byte writes and
+  512-byte reads work. The RAM buffer is cleared by a power cycle.

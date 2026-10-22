@@ -10,6 +10,7 @@ pub mod device;
 pub mod discovery;
 pub mod frame;
 pub mod history;
+pub mod ir;
 pub mod library;
 pub mod macros;
 pub mod names;
@@ -20,6 +21,7 @@ pub mod preset;
 pub mod settings;
 pub mod sys7;
 pub mod templates;
+pub mod tuner;
 pub mod worker;
 pub mod transport;
 
@@ -78,6 +80,10 @@ pub const ADDR_SLOT_SELECT: u32 = 0xE000_0000;
 /// Recovered from the app's `PresetStore._write(0xF0000000, const [])` on save;
 /// ACKed by the unit.
 pub const ADDR_SAVE: u32 = 0xF000_0000;
+/// The pedal's own tuner, 6 bytes in [`region::DEV`]: `[bypass volume,
+/// reference offset, enable, running, note, deviation]` (see [`tuner`]).
+/// Enable/disable verified on the device; single-byte writes, RAM only.
+pub const ADDR_TUNER: u32 = 0x7010_0000;
 /// Address of the cab/amp name table inside [`region::USR`].
 pub const ADDR_CAB_NAMES: u32 = 0x8000_0000;
 /// Address of the amp model name table inside [`region::USR`] (**verified**:

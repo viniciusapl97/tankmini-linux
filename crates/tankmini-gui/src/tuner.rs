@@ -12,6 +12,8 @@ use adw::prelude::*;
 use gtk::glib;
 use tankmini_core::pitch::{self, Pitch};
 
+use tankmini_core::worker::{Command, TunerControl};
+
 use crate::app::AppRef;
 use crate::widgets::{hbox, label, vbox};
 
@@ -24,6 +26,9 @@ pub struct Shared {
     /// True while a capture process is alive, so the UI can say why it shows nothing.
     pub capturing: Arc<AtomicBool>,
     pub a4: Arc<Mutex<f32>>,
+    /// Latest reading of the pedal's own tuner, which runs while this page is
+    /// shown. Used when the audio capture has nothing to say.
+    pub pedal: Arc<Mutex<Option<tankmini_core::tuner::Reading>>>,
 }
 
 impl Shared {
@@ -32,6 +37,7 @@ impl Shared {
             pitch: Arc::new(Mutex::new(None)),
             capturing: Arc::new(AtomicBool::new(false)),
             a4: Arc::new(Mutex::new(a4)),
+            pedal: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -173,8 +179,12 @@ pub fn page(app: &AppRef, shared: &Shared) -> gtk::Widget {
     spin.set_value(*shared.a4.lock().unwrap() as f64);
     spin.set_valign(gtk::Align::Center);
     reference.add_suffix(&spin);
+    let mute = adw::SwitchRow::new();
+    mute.set_title(crate::i18n::t("tuner.mute"));
+    mute.set_subtitle(crate::i18n::t("tuner.mute.sub"));
     let group = adw::PreferencesGroup::new();
     group.add(&reference);
+    group.add(&mute);
     page.append(&group);
 
     let status = label("", &["tm-small", "tm-faint"]);
@@ -183,8 +193,37 @@ pub fn page(app: &AppRef, shared: &Shared) -> gtk::Widget {
 
     {
         let shared = shared.clone();
+        let app = app.clone();
         spin.connect_value_changed(move |s| {
             *shared.a4.lock().unwrap() = s.value() as f32;
+            app.send(Command::Tuner(TunerControl::Reference(s.value().round() as u16)));
+        });
+    }
+    {
+        let app = app.clone();
+        mute.connect_active_notify(move |m| {
+            app.send(Command::Tuner(TunerControl::BypassVolume(if m.is_active() { 0 } else { 100 })));
+        });
+    }
+
+    // The pedal's tuner runs only while the page is on screen: while it runs the
+    // output follows the "while tuning" volume, so it must never be left on.
+    {
+        let app = app.clone();
+        let spin = spin.clone();
+        let mute = mute.clone();
+        page.connect_map(move |_| {
+            app.send(Command::Tuner(TunerControl::Reference(spin.value().round() as u16)));
+            app.send(Command::Tuner(TunerControl::BypassVolume(if mute.is_active() { 0 } else { 100 })));
+            app.send(Command::Tuner(TunerControl::On));
+        });
+    }
+    {
+        let app = app.clone();
+        let shared = shared.clone();
+        page.connect_unmap(move |_| {
+            app.send(Command::Tuner(TunerControl::Off));
+            *shared.pedal.lock().unwrap() = None;
         });
     }
 
@@ -205,12 +244,45 @@ pub fn page(app: &AppRef, shared: &Shared) -> gtk::Widget {
                 return glib::ControlFlow::Continue;
             }
             let capturing = shared.capturing.load(Ordering::Relaxed);
+            let from_pedal = shared.pedal.lock().ok().and_then(|r| *r).filter(|r| r.running);
             status.set_text(if capturing {
                 crate::i18n::t("tuner.capturing")
+            } else if from_pedal.is_some() {
+                crate::i18n::t("tuner.pedal")
             } else {
                 crate::i18n::t("tuner.no_device")
             });
-            match shared.pitch.lock().ok().and_then(|p| p.clone()) {
+            let audio = shared.pitch.lock().ok().and_then(|p| p.clone());
+            // No audio capture (no PipeWire, or the USB audio not routed): show
+            // what the pedal's own tuner hears instead.
+            if audio.is_none() {
+                if let Some((name, dev)) = from_pedal.and_then(|r| Some((r.note_name()?, r.deviation.unwrap_or(0)))) {
+                    note.set_text(name);
+                    string.set_text("");
+                    cents.set_text("");
+                    advice.set_text(if dev.abs() <= tankmini_core::tuner::IN_TUNE {
+                        crate::i18n::t("tuner.in_tune")
+                    } else if dev < 0 {
+                        crate::i18n::t("tuner.tighten")
+                    } else {
+                        crate::i18n::t("tuner.loosen")
+                    });
+                    bar.set_value(50.0 + dev.clamp(-50, 50) as f64);
+                    hertz.set_text("");
+                    for c in ["tm-tune-flat", "tm-tune-sharp", "tm-tune-good"] {
+                        note.remove_css_class(c);
+                    }
+                    note.add_css_class(if dev.abs() <= tankmini_core::tuner::IN_TUNE {
+                        "tm-tune-good"
+                    } else if dev < 0 {
+                        "tm-tune-flat"
+                    } else {
+                        "tm-tune-sharp"
+                    });
+                    return glib::ControlFlow::Continue;
+                }
+            }
+            match audio {
                 Some(p) => {
                     note.set_text(&p.label());
                     string.set_text(
@@ -251,7 +323,6 @@ pub fn page(app: &AppRef, shared: &Shared) -> gtk::Widget {
         });
     }
 
-    let _ = app;
     clamp.set_child(Some(&page));
     clamp.upcast()
 }

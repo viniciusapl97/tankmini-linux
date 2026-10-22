@@ -300,6 +300,17 @@ impl PresetTable {
         true
     }
 
+    /// Exchange two presets (the official app's "Swap preset").
+    pub fn swap_patches(&mut self, a: usize, b: usize) -> bool {
+        if a >= PATCH_COUNT || b >= PATCH_COUNT || a == b {
+            return false;
+        }
+        let (lo, hi) = (a.min(b), a.max(b));
+        let (head, tail) = self.raw.split_at_mut(hi * PATCH_LEN);
+        head[lo * PATCH_LEN..(lo + 1) * PATCH_LEN].swap_with_slice(&mut tail[..PATCH_LEN]);
+        true
+    }
+
     /// Validate every preset of the table (see [`validate_patch`]).
     pub fn validate(&self) -> Result<(), String> {
         for p in self.patches() {
@@ -471,6 +482,18 @@ mod tests {
         assert!(diff.contains(&(ON_OFFSET + 4)));
         assert!(diff.contains(&Patch::param_offset(4, 1)));
         assert!(t.diff_offsets(&before, 0).is_empty());
+    }
+
+    #[test]
+    fn swap_patches_exchanges_two_slots() {
+        let mut t = PresetTable::factory();
+        let (p2, p7) = (t.patch(2).unwrap().raw().to_vec(), t.patch(7).unwrap().raw().to_vec());
+        assert!(t.swap_patches(7, 2));
+        assert_eq!(t.patch(2).unwrap().raw(), &p7[..]);
+        assert_eq!(t.patch(7).unwrap().raw(), &p2[..]);
+        assert!(!t.swap_patches(3, 3));
+        assert!(!t.swap_patches(0, PATCH_COUNT));
+        assert!(PresetTable::from_raw(t.raw().to_vec()).is_ok());
     }
 
     #[test]

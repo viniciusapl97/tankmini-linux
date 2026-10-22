@@ -99,6 +99,13 @@ const TABLE: &[(&str, &str, &str)] = &[
     ("tuner.tighten", "aperte a corda", "tighten the string"),
     ("tuner.loosen", "afrouxe a corda", "loosen the string"),
     ("tuner.string", "corda", "string"),
+    ("tuner.mute", "Silenciar enquanto afina", "Mute while tuning"),
+    (
+        "tuner.mute.sub",
+        "A pedaleira corta o som enquanto esta tela está aberta",
+        "The pedal cuts its output while this screen is open",
+    ),
+    ("tuner.pedal", "afinador da pedaleira", "pedal's tuner"),
     // ---- modes ----
     ("view.play", "Tocar", "Play"),
     ("view.edit", "Editar", "Edit"),
