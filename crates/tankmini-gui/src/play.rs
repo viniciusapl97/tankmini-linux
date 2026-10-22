@@ -86,30 +86,28 @@ fn hero(app: &AppRef) -> gtk::Box {
 fn macros(app: &AppRef) -> gtk::Box {
     let wrap = vbox(0);
     wrap.append(&section("CONTROLES"));
-    let card = hbox(0);
+    let card = vbox(0);
     card.add_css_class("tm-card");
-    card.set_homogeneous(true);
+    card.append(&volume_bar(app));
     let flow = gtk::FlowBox::new();
     flow.set_selection_mode(gtk::SelectionMode::None);
     flow.set_homogeneous(true);
-    // Knobs go in pairs so a narrow window shows 2×2, never 3 + 1.
     flow.set_min_children_per_line(1);
-    flow.set_max_children_per_line(2);
+    flow.set_max_children_per_line(3);
     flow.set_column_spacing(8);
     flow.set_row_spacing(12);
-    flow.set_margin_top(18);
+    flow.set_margin_top(8);
     flow.set_margin_bottom(18);
     flow.set_margin_start(12);
     flow.set_margin_end(12);
+    let knobs: Vec<Macro> = Macro::ALL.into_iter().filter(|m| *m != Macro::Volume).collect();
     let (values, sens) = {
         let st = app.state.borrow();
         let p = st.current().expect("table loaded");
-        let v: Vec<u16> = Macro::ALL.iter().map(|m| m.read(&p)).collect();
+        let v: Vec<u16> = knobs.iter().map(|m| m.read(&p)).collect();
         (v, st.settings.knob_sensitivity as f64)
     };
-    let mut pair = hbox(8);
-    pair.set_homogeneous(true);
-    for (n, (m, value)) in Macro::ALL.into_iter().zip(values).enumerate() {
+    for (m, value) in knobs.into_iter().zip(values) {
         let cell = vbox(4);
         cell.set_halign(gtk::Align::Center);
         let app2 = app.clone();
@@ -135,16 +133,81 @@ fn macros(app: &AppRef) -> gtk::Box {
         help.set_wrap(true);
         help.set_max_width_chars(18);
         cell.append(&help);
-        pair.append(&cell);
-        if n % 2 == 1 {
-            flow.insert(&pair, -1);
-            pair = hbox(8);
-            pair.set_homogeneous(true);
-        }
+        flow.insert(&cell, -1);
     }
     card.append(&flow);
     wrap.append(&card);
     wrap
+}
+
+/// Volume as a wide bar with − and +, like the official app: the one control
+/// a beginner reaches for first, so it gets the most room.
+fn volume_bar(app: &AppRef) -> gtk::Box {
+    let value = {
+        let st = app.state.borrow();
+        st.current().map(|p| Macro::Volume.read(&p)).unwrap_or(0)
+    };
+    let row = hbox(10);
+    row.add_css_class("tm-volbar");
+    row.set_margin_top(18);
+    row.set_margin_start(18);
+    row.set_margin_end(18);
+    row.set_margin_bottom(4);
+
+    let name = label("Volume", &["tm-volbar-name"]);
+    name.set_hexpand(false);
+    row.append(&name);
+    let minus = gtk::Button::from_icon_name("list-remove-symbolic");
+    minus.add_css_class("tm-icon");
+    minus.set_tooltip_text(Some("Mais baixo"));
+    minus.set_valign(gtk::Align::Center);
+    row.append(&minus);
+    let scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 100.0, 1.0);
+    scale.set_value(value as f64);
+    scale.set_hexpand(true);
+    scale.set_draw_value(false);
+    scale.set_valign(gtk::Align::Center);
+    scale.add_css_class("tm-volbar-scale");
+    scale.set_tooltip_text(Some(Macro::Volume.help()));
+    row.append(&scale);
+    let plus = gtk::Button::from_icon_name("list-add-symbolic");
+    plus.add_css_class("tm-icon");
+    plus.set_tooltip_text(Some("Mais alto"));
+    plus.set_valign(gtk::Align::Center);
+    row.append(&plus);
+    let number = label(&value.to_string(), &["tm-volbar-value"]);
+    number.set_width_chars(3);
+    number.set_xalign(1.0);
+    row.append(&number);
+
+    {
+        let app = app.clone();
+        let number = number.clone();
+        scale.connect_value_changed(move |s| {
+            let v = s.value().round() as u16;
+            number.set_text(&v.to_string());
+            app.edit(Some("macro-Volume"), Redraw::Values, |t, i| {
+                Macro::Volume.apply(t, i, v);
+            });
+        });
+    }
+    // One undo step per drag or per burst of clicks.
+    {
+        let app = app.clone();
+        let release = gtk::GestureClick::new();
+        release.set_propagation_phase(gtk::PropagationPhase::Capture);
+        release.connect_released(move |_, _, _, _| app.seal());
+        scale.add_controller(release);
+    }
+    for (button, step) in [(&minus, -5.0), (&plus, 5.0)] {
+        let scale = scale.clone();
+        let app = app.clone();
+        button.connect_clicked(move |_| {
+            scale.set_value((scale.value() + step).clamp(0.0, 100.0));
+            app.seal();
+        });
+    }
+    row
 }
 
 const TOGGLES: [(usize, &str); 5] = [(0, "Dinâmica"), (1, "Amp"), (2, "Modulação"), (3, "Delay"), (4, "Reverb")];

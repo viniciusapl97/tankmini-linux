@@ -298,6 +298,7 @@ pub fn board(app: &AppRef, realistic: bool) -> gtk::FlowBox {
     let mut first = None;
     for (pos, module) in chain.iter().enumerate() {
         let card = pedal(app, pos, *module as usize, realistic);
+        card.set_widget_name(&crate::edit::block_widget_name(*module as usize));
         if first.is_none() {
             first = Some(card.clone());
         }

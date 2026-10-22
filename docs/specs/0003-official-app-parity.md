@@ -28,8 +28,8 @@ Source: a walk through M-EFCS 3.9.2314 on a phone connected to the pedal
 
 | Idea | Where it would go | Notes |
 |---|---|---|
-| Signal chain as a strip of small tiles with arrows; click to jump to that block's card | Top of Edit | Our board already shows order; this is a compact overview for small windows |
-| VOL as a wide bar with − / + | Play | Easier than a knob for beginners |
+| Signal chain as a strip of small tiles with arrows; click to jump to that block's card | Top of Edit | **Done**: the existing signal-path chips now scroll to the block and outline it (all three edit styles) |
+| VOL as a wide bar with − / + | Play | **Done**: Volume left the knob row for a full-width bar (±5 per click); Drive, Brilho, Ambiente stay knobs |
 | Rare actions in one "More" menu (share/import, swap, factory restore, tuner) | Header menu | We have the menu; keep the main screen clean |
 | Swap dialog with two position pickers and an arrow between them | Dialogs | Ours picks one target from the current preset; fine for now |
 | Search + Edit over an imported IR/AMP list | IR import | Worth it once people keep several IRs; we currently import one at a time |

@@ -84,7 +84,7 @@ fn header(app: &AppRef) -> gtk::Box {
 fn chain_strip(app: &AppRef) -> gtk::Box {
     let wrap = vbox(0);
     let head = section("CAMINHO DO SINAL");
-    head.append(&label("arraste para mudar a ordem", &["tm-small", "tm-faint"]));
+    head.append(&label("clique para ir ao bloco · arraste para mudar a ordem", &["tm-small", "tm-faint"]));
     wrap.append(&head);
     let strip = gtk::FlowBox::new();
     strip.set_selection_mode(gtk::SelectionMode::None);
@@ -161,6 +161,12 @@ fn chain_strip(app: &AppRef) -> gtk::Box {
             });
         }
         chip.add_controller(target);
+        let click = gtk::GestureClick::new();
+        {
+            let app = app.clone();
+            click.connect_released(move |_, _, _, _| jump_to_block(&app, module));
+        }
+        chip.add_controller(click);
         strip.insert(&chip, -1);
         if pos + 1 < MODULES {
             let arrow = label("→", &["tm-arrow"]);
@@ -169,6 +175,41 @@ fn chain_strip(app: &AppRef) -> gtk::Box {
         }
     }
     wrap
+}
+
+/// The name a block's card carries, so the signal path can find it.
+pub fn block_widget_name(module: usize) -> String {
+    format!("tm-block-{module}")
+}
+
+fn find_named(root: &gtk::Widget, name: &str) -> Option<gtk::Widget> {
+    if root.widget_name() == name {
+        return Some(root.clone());
+    }
+    let mut child = root.first_child();
+    while let Some(c) = child {
+        if let Some(found) = find_named(&c, name) {
+            return Some(found);
+        }
+        child = c.next_sibling();
+    }
+    None
+}
+
+/// Scroll the Edit page to a block's card and flash it briefly.
+fn jump_to_block(app: &AppRef, module: usize) {
+    let root = app.ui().edit_box.clone().upcast::<gtk::Widget>();
+    let Some(card) = find_named(&root, &block_widget_name(module)) else { return };
+    let Some(scroll) = root.ancestor(gtk::ScrolledWindow::static_type()).and_downcast::<gtk::ScrolledWindow>() else {
+        return;
+    };
+    if let Some(point) = card.compute_point(&root, &gtk::graphene::Point::new(0.0, 0.0)) {
+        let adj = scroll.vadjustment();
+        let target = (point.y() as f64 - 16.0).clamp(adj.lower(), (adj.upper() - adj.page_size()).max(adj.lower()));
+        adj.set_value(target);
+    }
+    card.add_css_class("tm-flash");
+    glib::timeout_add_local_once(std::time::Duration::from_millis(900), move || card.remove_css_class("tm-flash"));
 }
 
 fn cards(app: &AppRef) -> gtk::Box {
@@ -196,6 +237,7 @@ fn cards(app: &AppRef) -> gtk::Box {
     let chain = app.state.borrow().current().unwrap().chain();
     for (pos, module) in chain.iter().enumerate() {
         let card = card(app, pos, *module as usize);
+        card.set_widget_name(&block_widget_name(*module as usize));
         flow.insert(&card, -1);
     }
     wrap

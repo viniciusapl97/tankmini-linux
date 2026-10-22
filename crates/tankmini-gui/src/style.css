@@ -160,6 +160,12 @@ headerbar.tm-header {
 .tm-chip.off { color: @tm_faint; }
 .tm-chip.drop { border-color: @tm_text; }
 .tm-arrow { color: @tm_faint; }
+/* a block reached from the signal path */
+.tm-flash > .tm-card, .tm-flash.tm-card, .tm-flash .tm-pedal {
+  outline: 2px solid @tm_text;
+  outline-offset: 3px;
+  transition: outline-color 300ms ease-out;
+}
 
 /* sound gallery */
 .tm-sound {
@@ -385,3 +391,10 @@ menubutton.tm-icon > button:hover, menubutton.tm-icon > button:checked { backgro
 .tm-tune-sharp { color: #f0b429; }
 .tm-tune-bar trough { min-height: 10px; border-radius: 99px; background: @tm_surface_hi; }
 .tm-tune-bar progress { border-radius: 99px; background: #43d17a; }
+
+/* Play: volume bar */
+.tm-volbar-name { font-weight: 700; font-size: 13px; min-width: 64px; }
+.tm-volbar-value { font-feature-settings: "tnum"; font-weight: 700; font-size: 15px; }
+.tm-volbar-scale trough { min-height: 10px; border-radius: 999px; background: @tm_surface_hi; }
+.tm-volbar-scale highlight { min-height: 10px; border-radius: 999px; background: @tm_text; }
+.tm-volbar-scale slider { min-width: 20px; min-height: 20px; margin: -6px; background: @tm_text; border: 3px solid @tm_surface; box-shadow: none; }
