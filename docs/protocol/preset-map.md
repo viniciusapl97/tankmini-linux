@@ -113,9 +113,18 @@ app does (`PresetStore._write(0xF0000000, const [])`, recovered from
 "Salvar na pedaleira" send after writing the bytes.
 
 Sequence: write the preset (92 B at `0x0000 + i*92`) → read back and compare →
-`WRITE type 4 0xF0000000` (empty) → ACK. A value written this way survives slot
-switches; without the commit step the pedal keeps serving it from RAM only until
-the next reload from flash.
+`WRITE type 4 0xF0000000` (empty) → ACK.
+
+**Survives a power cycle (verified).** Preset 02 has parameter `0x2c` set from
+`0x03` to `0x2a`, committed, and the pedal was switched off and on again: reading
+the whole table afterwards showed exactly one byte different from the factory
+dump (that one). Writing `0x03` back and committing restored a table byte-identical
+to the factory capture, which also proves the commit is what makes the change
+permanent rather than a stale RAM buffer.
+
+Not separated yet: whether a plain write *without* the commit also persists on
+this firmware — the control run was inconclusive because the pedal had already
+been committed. The app always sends the commit, so this does not affect use.
 
 ## 4. Name table (type 5)
 
