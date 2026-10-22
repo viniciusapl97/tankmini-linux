@@ -28,7 +28,7 @@ active preset.
 
 | Off | Size | Field | Evidence |
 |---|---|---|---|
-| `0x00` | 2 | patch id (observed `0x3a`–`0x61`); changes with content | verified raw, meaning unknown |
+| `0x00` | 2 | **VOL**, preset volume u16 LE `0..100` (factory 58–100) | **from app** (`PatchFields.vol`, "VOL" slider); was "patch id" before |
 | `0x02` | 6 | **chain**: signal order of the 6 modules, always a permutation of `0..5` | verified (all 21 presets are permutations) |
 | `0x08` | 6 | **on/off per module** | **verified** (`getEffOnAt` = byte `0x08+i`) |
 | `0x0e` | 6 | **module type ("unit") per module** | **verified** (`getEffUnitAt` = byte `0x0e+i`) |
@@ -53,10 +53,17 @@ the counts the manual documents, which pins each slot to a role:
 | 4 | `0x12` | 0–5 | **reverb** | 6 reverbs |
 | 5 | `0x13` | 0–19 | **cabinet / IR** | 20 IR CAB slots |
 
-Amp and cabinet type bytes index the 20-entry name table of §4 — that is where
-`Mess Bog`, `FGLProV30s`, … come from in the UI.
+Amp type bytes index the amp name table (type 5 `0x90000000`) and cabinet type
+bytes the cab name table (type 5 `0x80000000`), see §4. Both **verified**.
 
 ### Parameter names
+
+**Superseded (2026-10-22)** by `app-findings.md` §7, now in `catalog.rs`:
+amp `Gain, Level, Bass, Mid, Treble`; cab `Level, Low Cut (20–300 Hz),
+High Cut (5–18 kHz)`; FX variants `Noise Gate / Boost / Compress` with
+`Gate` / `Gate, Gain` / `Gate, Sustain, Attack, Level`; delays
+`Analog, Duck, dTape, Dual, Lofi`. All **from app**. The table below is the
+older inference, kept for history.
 
 | Module | Where the names come from |
 |---|---|
@@ -138,6 +145,14 @@ been committed. The app always sends the commit, so this does not affect use.
 These are the 20 IR CAB slots of the pedal. The IR payload itself is not in the
 table; the app ships `tankMini_am{3,4}_ampCab.bin` (245 760 B, `AM2\0` magic +
 name + float header + samples) and uploads it through an address still unknown.
+
+### Amp names (type 5 `0x90000000`, **verified**)
+
+Same layout as the cab table (20 × 14 bytes): `UWE-Twins`, `UK-C30Normal`,
+`MarsVM410`, `Victor_Mars`, `BritPLEX_100`, `MarsFD100`, `Eagle_SAVAGE`,
+`TH_DieselHgn`, `PvEV5150`, `FORTIN_CALI`, `MESS_MktCln2`, `CA-tweed`,
+`BogSV20`, `JUICE_JIM`, `Sur_SL68`, `BassADAtube`, `BassAlmbic`,
+`BassG800K_7`, `BassTR-Trad`, `BassMarkT501`.
 
 ## 5. How this was recovered
 

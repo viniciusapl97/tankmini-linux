@@ -54,6 +54,30 @@ impl Role {
         }
     }
 
+    /// Longer, plain-language explanation for people who never used a pedal.
+    pub fn description(self) -> &'static str {
+        match self {
+            Role::Fx => "Fica no começo do caminho do som. O Noise Gate corta o chiado quando você não está tocando, o Boost dá um empurrão e o Compress iguala as notas fortes e fracas.",
+            Role::Amp => "É o coração do timbre: imita o pré de um amplificador. Pouco Gain soa limpo; muito Gain distorce.",
+            Role::Modulation => "Faz o som ondular ou \"nadar\": Chorus engorda, Phaser e Flanger giram, Tremolo pulsa o volume.",
+            Role::Delay => "Repete o que você toca, como um eco. Time é a distância entre as repetições, Fb quantas vezes repete.",
+            Role::Reverb => "Coloca o som dentro de um ambiente: sala, salão, mola de amplificador antigo ou nuvens longas.",
+            Role::Cabinet => "Simula a caixa e o alto-falante do amplificador (IR). Sem ela a distorção soa áspera no fone.",
+        }
+    }
+
+    /// Short code used in compact chain strips.
+    pub fn code(self) -> &'static str {
+        match self {
+            Role::Fx => "DYN",
+            Role::Amp => "AMP",
+            Role::Modulation => "MOD",
+            Role::Delay => "DLY",
+            Role::Reverb => "RVB",
+            Role::Cabinet => "CAB",
+        }
+    }
+
     /// Role of a slot index on this pedal (inferred, see module docs).
     pub fn for_slot(slot: usize) -> Role {
         match slot {
@@ -73,10 +97,13 @@ pub struct Variant {
     pub params: &'static [&'static str],
 }
 
+// All lists below are **from app** (`compact_effect_params.dart`,
+// `BlackboxData._initIrAmpDs`), see `docs/protocol/app-findings.md`.
+
 const FX_VARIANTS: &[Variant] = &[
-    Variant { name: "Gate", params: &["Threshold", "Release", "Level"] },
-    Variant { name: "Boost", params: &["Level", "Tone"] },
-    Variant { name: "Comp", params: &["Sustain", "Attack", "Level"] },
+    Variant { name: "Noise Gate", params: &["Gate"] },
+    Variant { name: "Boost", params: &["Gate", "Gain"] },
+    Variant { name: "Compress", params: &["Gate", "Sustain", "Attack", "Level"] },
 ];
 
 const MOD_VARIANTS: &[Variant] = &[
@@ -91,9 +118,10 @@ const MOD_VARIANTS: &[Variant] = &[
 
 const DLY_VARIANTS: &[Variant] = &[
     Variant { name: "Analog", params: &["Time", "Fb", "Mix", "Phaser", "Pitch"] },
-    Variant { name: "Duck", params: &["Time", "Fb", "Mix", "Unpack", "Speed"] },
-    Variant { name: "Dual", params: &["Time", "Fb", "Mix", "Speed", "Depth"] },
-    Variant { name: "Lofi", params: &["Time", "Fb", "Mix", "Grit", "Speed"] },
+    Variant { name: "Duck", params: &["Time", "Fb", "Mix", "Unpack", "Speed", "Depth"] },
+    Variant { name: "dTape", params: &["Time", "Fb", "Mix", "Grit", "Speed", "Depth"] },
+    Variant { name: "Dual", params: &["Time", "Fb", "Mix", "T-Mode", "Speed", "Depth"] },
+    Variant { name: "Lofi", params: &["Time", "Fb", "Mix", "Grit", "Speed", "Depth"] },
 ];
 
 const RVB_VARIANTS: &[Variant] = &[
@@ -105,8 +133,8 @@ const RVB_VARIANTS: &[Variant] = &[
     Variant { name: "Cloud", params: &["Decay", "Mix", "HPass", "LPass", "Diff"] },
 ];
 
-const AMP_PARAMS: &[&str] = &["Gain", "Bass", "Mid", "Treble", "Pres", "Level"];
-const CAB_PARAMS: &[&str] = &["Level"];
+const AMP_PARAMS: &[&str] = &["Gain", "Level", "Bass", "Mid", "Treble"];
+const CAB_PARAMS: &[&str] = &["Level", "Low Cut", "High Cut"];
 
 /// Variants available for a role. Amp and cab index the pedal's name table, so
 /// their names come from the device, not from here.
@@ -152,6 +180,10 @@ pub fn display_name(name: &str) -> &'static str {
         "Mid" | "Middle" => "Médios",
         "Treble" => "Agudos",
         "Pres" => "Presença",
+        "Gate" => "Gate",
+        "Low Cut" => "Corte de graves",
+        "High Cut" => "Corte de agudos",
+        "T-Mode" => "Modo",
         "Level" | "Output" => "Volume",
         "Threshold" => "Limiar",
         "Release" => "Liberação",
@@ -175,8 +207,112 @@ pub fn display_name(name: &str) -> &'static str {
         "ParamB" => "Ajuste B",
         "Min" => "Mínimo",
         "Max" => "Máximo",
+        "HPass" => "Corte de graves",
+        "LPass" => "Corte de agudos",
+        "Phaser" => "Phaser",
         "Input" => "Entrada",
         _ => "Parâmetro",
+    }
+}
+
+/// One-line, plain-language help for a parameter (by its technical name).
+pub fn param_help(name: &str) -> &'static str {
+    match name {
+        "Gain" => "Quanto o amplificador distorce. Baixo = limpo, alto = pesado.",
+        "Bass" => "Graves: corpo e peso do som.",
+        "Mid" | "Middle" => "Médios: presença na mistura com a banda.",
+        "Treble" => "Agudos: brilho e ataque das notas.",
+        "Pres" => "Presença: o brilho mais alto, deixa o som mais definido.",
+        "Level" | "Output" => "Volume de saída deste bloco.",
+        "Gate" => "Corta o chiado abaixo deste nível quando você não está tocando.",
+        "Low Cut" => "Tira graves embolados da caixa (20 a 300 Hz).",
+        "High Cut" => "Tira agudos ásperos da caixa (5 a 18 kHz).",
+        "T-Mode" => "Como as duas repetições do Dual se combinam.",
+        "Threshold" => "A partir de que volume o gate deixa o som passar.",
+        "Release" => "Quanto tempo o gate demora para fechar.",
+        "Sustain" => "Quanto o compressor segura as notas soando.",
+        "Attack" => "Quão rápido o compressor reage ao ataque da palheta.",
+        "Time" => "Distância entre as repetições do eco.",
+        "Fb" => "Quantas vezes o eco/efeito se repete.",
+        "Mix" => "Quanto do efeito se mistura ao som original.",
+        "Decay" => "Duração da cauda do reverb.",
+        "Depth" => "Intensidade da ondulação.",
+        "Speed" => "Velocidade da ondulação.",
+        "Tone" => "Mais escuro ou mais brilhante.",
+        "Grit" => "Sujeira de fita antiga nas repetições.",
+        "Diff" => "Quão espalhada e suave fica a cauda.",
+        "Combs" => "Ressonância metálica da mola.",
+        "RiseT" => "Tempo que o reverb leva para crescer.",
+        "Amt" => "Quantidade do brilho de oitava do Shimmer.",
+        "Pitch" => "Afinação das repetições.",
+        "HPass" => "Corta graves da cauda (deixa mais limpo).",
+        "LPass" => "Corta agudos da cauda (deixa mais escuro).",
+        "Phaser" => "Movimento de phaser nas repetições.",
+        "Unpack" => "Quanto o eco volta quando você para de tocar.",
+        "Min" | "Max" => "Faixa de frequência do filtro automático.",
+        "ParamA" | "ParamB" => "Ajuste específico deste modelo.",
+        _ => "Parâmetro ainda não identificado. O valor é gravado como está.",
+    }
+}
+
+/// A parameter value in real units when the app documents a scale
+/// (**from app**: cab Low Cut 20–300 Hz, High Cut 5–18 kHz). `None` means the
+/// pedal's own 0..100 is all we know.
+pub fn format_value(name: &str, value: u16) -> Option<String> {
+    let v = value.min(100) as f64;
+    match name {
+        "Low Cut" => Some(format!("{:.0} Hz", 20.0 + v * 280.0 / 100.0)),
+        "High Cut" => Some(format!("{:.1} kHz", 5.0 + v * 13.0 / 100.0)),
+        _ => None,
+    }
+}
+
+/// Instrument a sound is meant for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Instrument {
+    Guitar,
+    Acoustic,
+    Bass,
+}
+
+impl Instrument {
+    pub const ALL: [Instrument; 3] = [Instrument::Guitar, Instrument::Acoustic, Instrument::Bass];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Instrument::Guitar => "Guitarra",
+            Instrument::Acoustic => "Violão",
+            Instrument::Bass => "Baixo",
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Instrument::Guitar => "guitar",
+            Instrument::Acoustic => "acoustic",
+            Instrument::Bass => "bass",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Instrument> {
+        Instrument::ALL.into_iter().find(|i| i.key() == key)
+    }
+}
+
+/// Model indices 15..=19 are the bass amps/cabs (`BassADAtube` … `BassMarkT501`
+/// and `BassAgula25` … `BassEDN300` in the device tables; factory banks 6–7).
+pub const FIRST_BASS_MODEL: u8 = 15;
+
+/// Instrument a preset is voiced for, judged by its amp model.
+pub fn instrument_for_patch(patch: &crate::patch::Patch<'_>) -> Instrument {
+    let amp_on = patch.is_on(1);
+    if !amp_on && !patch.is_on(5) {
+        return Instrument::Acoustic;
+    }
+    if patch.unit(1) >= FIRST_BASS_MODEL {
+        Instrument::Bass
+    } else {
+        Instrument::Guitar
     }
 }
 
@@ -210,7 +346,7 @@ mod tests {
     fn variant_tables_are_consistent() {
         assert_eq!(variants(Role::Modulation).len(), 7);
         assert_eq!(variants(Role::Reverb).len(), 6);
-        assert_eq!(variants(Role::Delay).len(), 4);
+        assert_eq!(variants(Role::Delay).len(), 5);
         assert_eq!(variants(Role::Fx).len(), 3);
         for role in [Role::Fx, Role::Modulation, Role::Delay, Role::Reverb] {
             for v in variants(role) {
@@ -224,7 +360,13 @@ mod tests {
         assert_eq!(param_name(Role::Reverb, 0, 0), Some("Decay"));
         assert_eq!(param_name(Role::Reverb, 4, 2), Some("Tone")); // Shimmer
         assert_eq!(param_name(Role::Modulation, 1, 1), Some("ParamA")); // Phaser
-        assert_eq!(param_name(Role::Amp, 7, 4), Some("Pres"));
+        assert_eq!(param_name(Role::Amp, 7, 1), Some("Level"));
+        assert_eq!(param_name(Role::Amp, 7, 4), Some("Treble"));
+        assert_eq!(param_name(Role::Cabinet, 0, 2), Some("High Cut"));
+        assert_eq!(param_name(Role::Delay, 2, 3), Some("Grit")); // dTape
+        assert_eq!(format_value("Low Cut", 0).as_deref(), Some("20 Hz"));
+        assert_eq!(format_value("High Cut", 100).as_deref(), Some("18.0 kHz"));
+        assert_eq!(format_value("Gain", 10), None);
         assert_eq!(param_name(Role::Reverb, 0, 5), None);
     }
 }

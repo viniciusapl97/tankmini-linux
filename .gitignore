@@ -10,3 +10,6 @@ __pycache__/
 .idea/
 .vscode/
 *.swp
+
+# cargo build output
+target/

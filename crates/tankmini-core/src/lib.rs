@@ -9,10 +9,17 @@ pub mod catalog;
 pub mod device;
 pub mod discovery;
 pub mod frame;
+pub mod history;
+pub mod library;
+pub mod macros;
 pub mod names;
 pub mod patch;
+pub mod paths;
 pub mod preset;
+pub mod settings;
 pub mod sys7;
+pub mod templates;
+pub mod worker;
 pub mod transport;
 
 pub use device::{DeviceInfo, Pedal};
@@ -47,8 +54,22 @@ pub mod cmd {
 
 /// Address of the live preset block inside [`region::DEV`].
 pub const ADDR_PRESET: u32 = 0x0000;
+/// The pedal's edit buffer: the 92 bytes of the preset that is playing.
+///
+/// The official app edits this buffer field by field while the user turns
+/// knobs (`sendPatchField`), and only writes the stored table on save. Reading
+/// it returns the active preset (**verified**); writes are ACKed and leave the
+/// stored table untouched (**verified**).
+pub const ADDR_EDIT: u32 = 0x1000_0000;
 /// Address of the active slot index (read, length 1) inside [`region::DEV`].
 pub const ADDR_ACTIVE_SLOT: u32 = 0x2000_0000;
+/// Global state, 4 bytes: `[active slot, ?, bypass, ?]` (**verified** read;
+/// bypass write verified with read-back).
+pub const ADDR_GLOB: u32 = 0x2000_0000;
+/// Global bypass flag (`[1]` = all effects off), byte 2 of the glob.
+pub const ADDR_BYPASS: u32 = 0x2000_0002;
+/// USB loopback on/off (**from app**, write-only: the app never reads it).
+pub const ADDR_LOOPBACK: u32 = 0xD000_0000;
 /// Writing `[i]` to `ADDR_SLOT_SELECT + i` selects slot `i`.
 pub const ADDR_SLOT_SELECT: u32 = 0xE000_0000;
 /// Writing an empty payload here commits the preset table to flash.
@@ -58,6 +79,9 @@ pub const ADDR_SLOT_SELECT: u32 = 0xE000_0000;
 pub const ADDR_SAVE: u32 = 0xF000_0000;
 /// Address of the cab/amp name table inside [`region::USR`].
 pub const ADDR_CAB_NAMES: u32 = 0x8000_0000;
+/// Address of the amp model name table inside [`region::USR`] (**verified**:
+/// `UWE-Twins`, `UK-C30Normal`, … `BassMarkT501`).
+pub const ADDR_AMP_NAMES: u32 = 0x9000_0000;
 /// Length of one name entry in the cab/amp table (ASCII, NUL padded).
 pub const CAB_NAME_LEN: usize = 14;
 /// Number of cab/amp slots on this unit (the manual says 20 IR CAB slots).

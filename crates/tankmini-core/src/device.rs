@@ -6,7 +6,10 @@ use crate::frame::Frame;
 use crate::preset::{Preset, PRESET_LEN};
 use crate::region;
 use crate::transport::Transport;
-use crate::{cmd, ADDR_ACTIVE_SLOT, ADDR_CAB_NAMES, ADDR_PRESET, ADDR_SLOT_SELECT, CAB_NAME_COUNT, CAB_NAME_LEN};
+use crate::{
+    cmd, ADDR_ACTIVE_SLOT, ADDR_AMP_NAMES, ADDR_BYPASS, ADDR_GLOB, ADDR_LOOPBACK, ADDR_CAB_NAMES, ADDR_EDIT, ADDR_PRESET, ADDR_SLOT_SELECT, CAB_NAME_COUNT,
+    CAB_NAME_LEN,
+};
 
 /// Chunk size used by the official family apps for block writes; verified
 /// ACKed on this unit for the whole preset block.
@@ -40,7 +43,7 @@ impl Pedal {
     pub fn identify(&mut self) -> std::io::Result<Option<DeviceInfo>> {
         let reply = self
             .transport
-            .request_one(&Frame::new(cmd::IDENTITY, Vec::new()), T_SHORT)?;
+            .request_matching(&Frame::new(cmd::IDENTITY, Vec::new()), T_SHORT, |f| f.cmd == cmd::IDENTITY)?;
         Ok(reply.map(|f| {
             let end = f.body.iter().position(|b| *b == 0).unwrap_or(f.body.len());
             DeviceInfo {
@@ -55,7 +58,12 @@ impl Pedal {
         body.push(rtype);
         body.extend_from_slice(&addr.to_le_bytes());
         body.extend_from_slice(&(len as u32).to_le_bytes()[..3]);
-        let reply = self.transport.request_one(&Frame::new(cmd::READ, body), T_READ)?;
+        // The reply echoes type and address: match on them so a late answer to
+        // another read of the same length can never be taken for this one.
+        let echo = body[..5].to_vec();
+        let reply = self.transport.request_matching(&Frame::new(cmd::READ, body), T_READ, |f| {
+            (f.cmd == cmd::READ && f.body.starts_with(&echo)) || f.cmd == cmd::ACK
+        })?;
         Ok(match reply {
             Some(f) if f.cmd == cmd::READ && f.body.len() >= 8 + len => Some(f.body[8..8 + len].to_vec()),
             _ => None,
@@ -69,7 +77,7 @@ impl Pedal {
         body.extend_from_slice(&addr.to_le_bytes());
         body.extend_from_slice(&(data.len() as u32).to_le_bytes()[..3]);
         body.extend_from_slice(data);
-        let reply = self.transport.request_one(&Frame::new(cmd::WRITE, body), T_WRITE)?;
+        let reply = self.transport.request_matching(&Frame::new(cmd::WRITE, body), T_WRITE, |f| f.cmd == cmd::ACK)?;
         Ok(reply.and_then(|f| (f.cmd == cmd::ACK).then(|| f.body.first().copied().unwrap_or(0xff))))
     }
 
@@ -115,6 +123,19 @@ impl Pedal {
             .and_then(|v| v.first().copied()))
     }
 
+    /// The 4 global bytes: active slot, unknown, bypass, unknown.
+    pub fn glob(&mut self) -> std::io::Result<Option<[u8; 4]>> {
+        Ok(self.read(region::DEV, ADDR_GLOB, 4)?.and_then(|v| v.try_into().ok()))
+    }
+
+    pub fn set_bypass(&mut self, on: bool) -> std::io::Result<bool> {
+        Ok(self.write(region::DEV, ADDR_BYPASS, &[u8::from(on)])? == Some(0))
+    }
+
+    pub fn set_loopback(&mut self, on: bool) -> std::io::Result<bool> {
+        Ok(self.write(region::DEV, ADDR_LOOPBACK, &[u8::from(on)])? == Some(0))
+    }
+
     pub fn select_slot(&mut self, slot: u8) -> std::io::Result<bool> {
         let ack = self.write(region::DEV, ADDR_SLOT_SELECT + slot as u32, &[slot])?;
         Ok(ack == Some(0))
@@ -143,11 +164,31 @@ impl Pedal {
         Ok(self.write(region::DEV, addr, data)?.unwrap_or(0xff))
     }
 
-    /// Cab/amp names: 20 entries of 14 bytes at `USR` `0x80000000`,
+    /// Read the edit buffer (the playing preset, 92 bytes).
+    pub fn read_edit(&mut self) -> std::io::Result<Option<Vec<u8>>> {
+        self.read(region::DEV, ADDR_EDIT, crate::patch::PATCH_LEN)
+    }
+
+    /// Write `data` at `offset` inside the edit buffer: the live-edit path of
+    /// the official app. Returns the ACK status (`0x00` = accepted).
+    pub fn write_edit(&mut self, offset: usize, data: &[u8]) -> std::io::Result<u8> {
+        Ok(self.write(region::DEV, ADDR_EDIT + offset as u32, data)?.unwrap_or(0xff))
+    }
+
+    /// Cab names: 20 entries of 14 bytes at `USR` `0x80000000`,
     /// NUL padded (verified: 280 bytes ends exactly after the 20th name).
     pub fn cab_names(&mut self) -> std::io::Result<Vec<String>> {
+        self.name_table(ADDR_CAB_NAMES)
+    }
+
+    /// Amp model names: same layout at `USR` `0x90000000` (verified).
+    pub fn amp_names(&mut self) -> std::io::Result<Vec<String>> {
+        self.name_table(ADDR_AMP_NAMES)
+    }
+
+    fn name_table(&mut self, addr: u32) -> std::io::Result<Vec<String>> {
         let len = CAB_NAME_COUNT * CAB_NAME_LEN;
-        let Some(raw) = self.read(region::USR, ADDR_CAB_NAMES, len)? else {
+        let Some(raw) = self.read(region::USR, addr, len)? else {
             return Ok(Vec::new());
         };
         Ok(raw

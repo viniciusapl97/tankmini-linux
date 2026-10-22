@@ -87,8 +87,50 @@ impl Transport {
         Ok(parse_frames(&unwrap_sysex(&raw)))
     }
 
+    /// Send a frame and return as soon as one complete reply frame arrived
+    /// (or `None` after `timeout`). Waiting out the whole timeout on every
+    /// exchange made each knob step cost a second.
+    pub fn request_first(&mut self, frame: &Frame, timeout: Duration) -> io::Result<Option<Frame>> {
+        self.request_matching(frame, timeout, |_| true)
+    }
+
+    /// Like [`Self::request_first`], but only a reply accepted by `want` ends
+    /// the wait. A late reply to an earlier, timed-out request is skipped
+    /// instead of being taken for this one.
+    pub fn request_matching(
+        &mut self,
+        frame: &Frame,
+        timeout: Duration,
+        want: impl Fn(&Frame) -> bool,
+    ) -> io::Result<Option<Frame>> {
+        self.flush();
+        self.write_bytes(&frame.to_sysex())?;
+        let mut buf = Vec::new();
+        let deadline = Instant::now() + timeout;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() || !self.wait_readable(left)? {
+                return Ok(None);
+            }
+            let mut chunk = [0u8; 4096];
+            match std::io::Read::read(&mut self.file, &mut chunk) {
+                Ok(0) => return Ok(None),
+                Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => continue,
+                Err(e) => return Err(e),
+            }
+            // A reply is complete once its SysEx closed and the frame inside
+            // is whole (parse_frames drops truncated frames).
+            if buf.contains(&0xf7) {
+                if let Some(f) = parse_frames(&unwrap_sysex(&buf)).into_iter().find(|f| want(f)) {
+                    return Ok(Some(f));
+                }
+            }
+        }
+    }
+
     /// Send a frame and return its first reply, if any.
     pub fn request_one(&mut self, frame: &Frame, timeout: Duration) -> io::Result<Option<Frame>> {
-        Ok(self.request(frame, timeout)?.into_iter().next())
+        self.request_first(frame, timeout)
     }
 }

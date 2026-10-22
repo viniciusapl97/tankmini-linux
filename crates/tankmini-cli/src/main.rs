@@ -16,6 +16,10 @@ struct Cli {
     #[arg(long, global = true)]
     dev: Option<PathBuf>,
 
+    /// Machine-readable output (show, patch, backups, names, library, templates)
+    #[arg(long, global = true)]
+    json: bool,
+
     #[command(subcommand)]
     cmd: Command,
 }
@@ -83,13 +87,45 @@ enum Command {
     Copy { from: usize, to: usize },
     /// Restore the factory preset table and commit it to flash
     Factory,
-    /// Print the 32 cab/amp names stored on the pedal
+    /// Print the amp and cab model names stored on the pedal
     Names,
+    /// Global bypass: all effects off (`on`) or back on (`off`)
+    Bypass { state: String },
+    /// Local preset library (~/.local/share/tankmini/library.json)
+    Library {
+        #[command(subcommand)]
+        op: LibraryOp,
+    },
+    /// Built-in starting sounds ("Sons prontos")
+    Templates {
+        #[command(subcommand)]
+        op: TemplateOp,
+    },
     /// Raw protocol access: read/write a memory region
     Raw {
         #[command(subcommand)]
         op: RawOp,
     },
+}
+
+#[derive(Subcommand)]
+enum LibraryOp {
+    /// List entries (optionally filtered)
+    List { query: Option<String> },
+    /// Save preset `index` from the pedal into the library
+    Add { index: usize, name: String },
+    /// Write a library entry to pedal slot `index` and commit it
+    Apply { id: String, index: usize },
+    /// Export an entry as a 92-byte .tankmini file
+    Export { id: String, file: PathBuf },
+}
+
+#[derive(Subcommand)]
+enum TemplateOp {
+    /// List the built-in sounds
+    List,
+    /// Write a built-in sound to pedal slot `index` and commit it
+    Apply { id: String, index: usize },
 }
 
 #[derive(Subcommand)]
@@ -188,7 +224,66 @@ fn print_preset(preset: &Preset) {
     }
 }
 
+/// Backup → write one preset → verify → commit, like the GUI's Salvar.
+fn store_patch(pedal: &mut Pedal, index: usize, bytes: &[u8], note: &str) -> Result<(), String> {
+    if index >= tankmini_core::PATCH_COUNT {
+        return Err("índice fora da faixa 0-20".into());
+    }
+    let store = BackupStore::new(BackupStore::default_root());
+    if let Some(current) = pedal.read_table().map_err(|e| e.to_string())? {
+        let path = store.save(&current.to_preset(), Some(index as u8), note).map_err(|e| e.to_string())?;
+        eprintln!("backup: {}", path.display());
+    }
+    let ack = pedal.write_patch(index as u8, bytes).map_err(|e| e.to_string())?;
+    std::thread::sleep(Duration::from_millis(120));
+    let back = pedal.read_patch(index as u8).map_err(|e| e.to_string())?;
+    if ack != 0 || back.as_deref() != Some(bytes) {
+        return Err(format!("gravação não confirmada (ack 0x{ack:02x})"));
+    }
+    match pedal.commit().map_err(|e| e.to_string())? {
+        Some(0) => Ok(()),
+        other => Err(format!("commit recusado: {other:?}")),
+    }
+}
+
+/// One preset as JSON, with the catalog's names.
+fn patch_json(patch: &tankmini_core::Patch<'_>, amps: &[String], cabs: &[String]) -> serde_json::Value {
+    use tankmini_core::catalog::{self, Role};
+    let modules: Vec<serde_json::Value> = (0..6)
+        .map(|m| {
+            let role = Role::for_slot(m);
+            let unit = patch.unit(m);
+            let params: Vec<serde_json::Value> = (0..6)
+                .map(|k| {
+                    serde_json::json!({
+                        "name": catalog::param_name(role, unit, k),
+                        "value": patch.param(m, k).unwrap_or(0),
+                    })
+                })
+                .collect();
+            serde_json::json!({
+                "module": m,
+                "role": role.code(),
+                "unit": unit,
+                "name": patch.effect_name(m, amps, cabs),
+                "on": patch.is_on(m),
+                "params": params,
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "index": patch.index,
+        "slot": patch.label(),
+        "vol": patch.vol(),
+        "chain": patch.chain(),
+        "instrument": catalog::instrument_for_patch(patch).key(),
+        "modules": modules,
+        "hex": tankmini_core::library::to_hex(patch.raw()),
+    })
+}
+
 fn run(cli: Cli) -> Result<(), String> {
+    let json = cli.json;
     let result = match cli.cmd {
         Command::Devices => {
             let devices = find_devices();
@@ -227,6 +322,27 @@ fn run(cli: Cli) -> Result<(), String> {
                 println!("wrote {} bytes to {}", preset.raw().len(), path.display());
             }
             print!("{}", preset.hexdump());
+            Ok(())
+        }
+        Command::Show if json => {
+            let (mut pedal, _) = open_device(cli.dev.clone())?;
+            let active = pedal.active_slot().map_err(|e| e.to_string())?;
+            let table = pedal.read_table().map_err(|e| e.to_string())?.ok_or("sem tabela")?;
+            let amps = pedal.amp_names().unwrap_or_default();
+            let cabs = pedal.cab_names().unwrap_or_default();
+            let names = tankmini_core::PresetNames::load_default();
+            let presets: Vec<serde_json::Value> = table
+                .patches()
+                .map(|p| {
+                    let mut v = patch_json(&p, &amps, &cabs);
+                    v["local_name"] = serde_json::json!(names.get(p.index));
+                    v
+                })
+                .collect();
+            println!(
+                "{}",
+                serde_json::json!({ "active": active, "presets": presets })
+            );
             Ok(())
         }
         Command::Show => {
@@ -302,6 +418,19 @@ fn run(cli: Cli) -> Result<(), String> {
         }
         Command::Backups => {
             let store = BackupStore::new(BackupStore::default_root());
+            if json {
+                let list = store.list_info().map_err(|e| e.to_string())?;
+                let items: Vec<serde_json::Value> = list
+                    .iter()
+                    .map(|b| {
+                        serde_json::json!({
+                            "path": b.path, "timestamp": b.timestamp, "slot": b.slot, "note": b.note
+                        })
+                    })
+                    .collect();
+                println!("{}", serde_json::Value::Array(items));
+                return Ok(());
+            }
             let list = store.list().map_err(|e| e.to_string())?;
             if list.is_empty() {
                 println!("no backups in {}", store.root().display());
@@ -319,6 +448,12 @@ fn run(cli: Cli) -> Result<(), String> {
                 .ok_or("sem tabela de presets")?;
             let mut table = table;
             let patch = table.patch(index).ok_or("índice fora da faixa 0-20")?;
+            if json && set.is_none() && !write {
+                let amps = pedal.amp_names().unwrap_or_default();
+                let cabs = pedal.cab_names().unwrap_or_default();
+                println!("{}", patch_json(&patch, &amps, &cabs));
+                return Ok(());
+            }
             println!(
                 "preset {} (index {}) id=0x{:02x} cadeia={:?} flags={:?}",
                 patch.label(),
@@ -456,8 +591,114 @@ fn run(cli: Cli) -> Result<(), String> {
         }
         Command::Names => {
             let (mut pedal, _) = open_device(cli.dev.clone())?;
-            for (i, name) in pedal.cab_names().map_err(|e| e.to_string())?.iter().enumerate() {
-                println!("{i:02}: {name}");
+            let amps = pedal.amp_names().map_err(|e| e.to_string())?;
+            let cabs = pedal.cab_names().map_err(|e| e.to_string())?;
+            if json {
+                println!("{}", serde_json::json!({ "amps": amps, "cabs": cabs }));
+                return Ok(());
+            }
+            println!("    {:<16} cab", "amp");
+            for i in 0..amps.len().max(cabs.len()) {
+                println!(
+                    "{i:02}: {:<16} {}",
+                    amps.get(i).map(String::as_str).unwrap_or("-"),
+                    cabs.get(i).map(String::as_str).unwrap_or("-")
+                );
+            }
+            Ok(())
+        }
+        Command::Bypass { state } => {
+            let on = match state.as_str() {
+                "on" | "1" | "true" => true,
+                "off" | "0" | "false" => false,
+                _ => return Err("use: tankmini bypass on|off".into()),
+            };
+            let (mut pedal, _) = open_device(cli.dev.clone())?;
+            if !pedal.set_bypass(on).map_err(|e| e.to_string())? {
+                return Err("a pedaleira recusou o bypass".into());
+            }
+            println!("bypass {}", if on { "ligado (sem efeitos)" } else { "desligado" });
+            Ok(())
+        }
+        Command::Library { op } => {
+            use tankmini_core::library::Library;
+            let path = Library::default_path();
+            let mut lib = Library::load(&path)?;
+            match op {
+                LibraryOp::List { query } => {
+                    let found = lib.search(query.as_deref().unwrap_or(""), None);
+                    if json {
+                        println!("{}", serde_json::to_string(&found).map_err(|e| e.to_string())?);
+                    } else if found.is_empty() {
+                        println!("biblioteca vazia ({})", path.display());
+                    } else {
+                        for e in found {
+                            println!(
+                                "{}  {}{:<28} {:<9} {}",
+                                e.id,
+                                if e.favorite { "★ " } else { "  " },
+                                e.name,
+                                e.instrument,
+                                e.tags.join(",")
+                            );
+                        }
+                    }
+                }
+                LibraryOp::Add { index, name } => {
+                    let (mut pedal, _) = open_device(cli.dev.clone())?;
+                    let bytes = pedal.read_patch(index as u8).map_err(|e| e.to_string())?.ok_or("sem resposta")?;
+                    let table = tankmini_core::PresetTable::factory();
+                    let mut probe = table.clone();
+                    probe.set_patch_raw(0, &bytes);
+                    let inst = tankmini_core::catalog::instrument_for_patch(&probe.patch(0).unwrap());
+                    let id = lib.add(&name, inst.key(), Vec::new(), &bytes)?;
+                    lib.save(&path).map_err(|e| e.to_string())?;
+                    println!("{id}");
+                }
+                LibraryOp::Apply { id, index } => {
+                    let entry = lib.get(&id).ok_or("id não encontrado")?;
+                    let bytes = entry.patch_bytes().ok_or("entrada corrompida")?;
+                    let (mut pedal, _) = open_device(cli.dev.clone())?;
+                    store_patch(&mut pedal, index, &bytes, "antes de aplicar da biblioteca")?;
+                    let mut names = tankmini_core::PresetNames::load_default();
+                    names.set(index, &entry.name);
+                    names.save_default().map_err(|e| e.to_string())?;
+                    println!("{} → {}", entry.name, tankmini_core::SLOT_LABELS[index]);
+                }
+                LibraryOp::Export { id, file } => {
+                    let entry = lib.get(&id).ok_or("id não encontrado")?;
+                    let bytes = entry.patch_bytes().ok_or("entrada corrompida")?;
+                    std::fs::write(&file, bytes).map_err(|e| e.to_string())?;
+                    println!("{} → {}", entry.name, file.display());
+                }
+            }
+            Ok(())
+        }
+        Command::Templates { op } => {
+            use tankmini_core::templates::{by_id, TEMPLATES};
+            match op {
+                TemplateOp::List => {
+                    if json {
+                        let items: Vec<serde_json::Value> = TEMPLATES
+                            .iter()
+                            .map(|t| serde_json::json!({
+                                "id": t.id, "name": t.name, "instrument": t.instrument.key(),
+                                "description": t.description, "hex": tankmini_core::library::to_hex(&t.bytes()),
+                            }))
+                            .collect();
+                        println!("{}", serde_json::Value::Array(items));
+                    } else {
+                        for t in TEMPLATES {
+                            println!("{:<13} {:<18} {:<9} {}", t.id, t.name, t.instrument.key(), t.description);
+                        }
+                    }
+                }
+                TemplateOp::Apply { id, index } => {
+                    let t = by_id(&id).ok_or("som desconhecido (veja `tankmini templates list`)")?;
+                    let (mut pedal, _) = open_device(cli.dev.clone())?;
+                    store_patch(&mut pedal, index, &t.bytes(), "antes de aplicar som pronto")?;
+                    println!("{} → {}", t.name, tankmini_core::SLOT_LABELS[index]);
+                }
             }
             Ok(())
         }

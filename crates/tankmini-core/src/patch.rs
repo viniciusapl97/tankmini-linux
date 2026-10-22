@@ -10,12 +10,10 @@
 //!
 //! ```text
 //! off  size  meaning                                   evidence
-//! 0x00   2   patch id/version (observed 0x3a..0x61)    verified (raw), meaning inferred
+//! 0x00   2   preset volume VOL, u16 LE 0..100          from app (PatchFields.vol)
 //! 0x02   6   effect chain: order of the 6 modules      verified (always a permutation of 0..5)
-//! 0x08   6   per-module enable/flag bytes (0..2)       inferred
-//! 0x0e   1   unknown (0..2)                            inferred
-//! 0x0f   1   unknown, observed 0..19 (likely amp model) inferred
-//! 0x10   4   unknown (small values)                    inferred
+//! 0x08   6   per-module on/off                         verified
+//! 0x0e   6   per-module type ("unit")                  verified
 //! 0x14  72   36 parameters, u16 LE, every value 0..100 verified (range)
 //! ```
 //!
@@ -44,6 +42,37 @@ pub struct ParamSlot {
     pub index: usize,
 }
 
+/// Check that 92 bytes are a preset this app can show and the pedal can play:
+/// the chain is a permutation of the six modules and every type byte is a
+/// known variant. Files, library entries and backups go through this before
+/// they reach the model.
+pub fn validate_patch(bytes: &[u8]) -> Result<(), String> {
+    if bytes.len() != PATCH_LEN {
+        return Err(format!("preset precisa de {PATCH_LEN} bytes, veio {}", bytes.len()));
+    }
+    let mut chain = bytes[2..8].to_vec();
+    chain.sort_unstable();
+    if chain != [0, 1, 2, 3, 4, 5] {
+        return Err("ordem dos blocos inválida".into());
+    }
+    for m in 0..MODULE_COUNT {
+        let role = crate::catalog::Role::for_slot(m);
+        if bytes[UNIT_OFFSET + m] as usize >= crate::catalog::variant_count(role) {
+            return Err(format!("tipo de {} inválido", role.label()));
+        }
+    }
+    Ok(())
+}
+
+/// One module's full state, for copy/paste between presets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Block {
+    pub module: usize,
+    pub unit: u8,
+    pub on: bool,
+    pub params: [u16; PARAMS_PER_MODULE],
+}
+
 /// A single preset, borrowed from the table.
 #[derive(Debug, Clone, Copy)]
 pub struct Patch<'a> {
@@ -65,8 +94,13 @@ impl<'a> Patch<'a> {
         SLOT_LABELS.get(self.index).copied().unwrap_or("??")
     }
 
-    /// Patch id at 0x00. Meaning is unknown; it changes with the preset content.
+    /// Bytes 0x00..0x02, kept for the CLI; this is the preset volume.
     pub fn id(&self) -> u16 {
+        self.vol()
+    }
+
+    /// Preset volume VOL (0..100), the per-preset level slider of the app.
+    pub fn vol(&self) -> u16 {
         u16::from_le_bytes([self.raw[0], self.raw[1]])
     }
 
@@ -90,11 +124,14 @@ impl<'a> Patch<'a> {
 
     /// Module `slot` on/off byte (`0x08 + slot`, verified via the app accessor).
     pub fn is_on(&self, slot: usize) -> bool {
-        self.raw[ON_OFFSET + slot] != 0
+        slot < MODULE_COUNT && self.raw[ON_OFFSET + slot] != 0
     }
 
     /// Module `slot` unit/type byte (`0x0e + slot`, verified via the app accessor).
     pub fn unit(&self, slot: usize) -> u8 {
+        if slot >= MODULE_COUNT {
+            return 0;
+        }
         self.raw[UNIT_OFFSET + slot]
     }
 
@@ -103,11 +140,12 @@ impl<'a> Patch<'a> {
         crate::catalog::Role::for_slot(slot)
     }
 
-    /// Display name of the effect in `slot`, using the device cab/amp table for
+    /// Display name of the effect in `slot`, using the device name tables for
     /// amp and cabinet slots.
-    pub fn effect_name<'b>(&self, slot: usize, names: &'b [String]) -> String {
+    pub fn effect_name(&self, slot: usize, amp_names: &[String], cab_names: &[String]) -> String {
         let role = self.role(slot);
         let unit = self.unit(slot) as usize;
+        let names = if role == crate::catalog::Role::Amp { amp_names } else { cab_names };
         match role {
             crate::catalog::Role::Amp | crate::catalog::Role::Cabinet => names
                 .get(unit)
@@ -184,6 +222,15 @@ impl PresetTable {
         true
     }
 
+    pub fn set_vol(&mut self, patch: usize, vol: u16) -> bool {
+        if patch >= PATCH_COUNT {
+            return false;
+        }
+        let off = patch * PATCH_LEN;
+        self.raw[off..off + 2].copy_from_slice(&vol.min(100).to_le_bytes());
+        true
+    }
+
     pub fn set_byte(&mut self, patch: usize, offset: usize, value: u8) -> bool {
         if patch >= PATCH_COUNT || offset >= PATCH_LEN {
             return false;
@@ -253,10 +300,19 @@ impl PresetTable {
         true
     }
 
+    /// Validate every preset of the table (see [`validate_patch`]).
+    pub fn validate(&self) -> Result<(), String> {
+        for p in self.patches() {
+            validate_patch(p.raw()).map_err(|e| format!("{}: {e}", p.label()))?;
+        }
+        Ok(())
+    }
+
     /// Import bytes into a slot. Accepts a single 92-byte preset or a whole
-    /// 1942-byte table.
+    /// 1942-byte table; both are validated first.
     pub fn import(&mut self, slot: usize, bytes: &[u8]) -> Result<(), String> {
         if bytes.len() == PATCH_LEN {
+            validate_patch(bytes)?;
             if slot >= PATCH_COUNT {
                 return Err("slot fora da faixa".into());
             }
@@ -267,6 +323,7 @@ impl PresetTable {
             if !bytes[PATCH_LEN * PATCH_COUNT..].starts_with(b"PATCHEND") {
                 return Err("arquivo de tabela sem PATCHEND".into());
             }
+            PresetTable::from_raw(bytes.to_vec())?.validate()?;
             self.raw.copy_from_slice(bytes);
             return Ok(());
         }
@@ -275,6 +332,70 @@ impl PresetTable {
             bytes.len(),
             super::preset::PRESET_LEN
         ))
+    }
+
+    /// Replace one preset wholesale (92 bytes).
+    pub fn set_patch_raw(&mut self, index: usize, bytes: &[u8]) -> bool {
+        if index >= PATCH_COUNT || bytes.len() != PATCH_LEN {
+            return false;
+        }
+        self.raw[index * PATCH_LEN..(index + 1) * PATCH_LEN].copy_from_slice(bytes);
+        true
+    }
+
+    /// Everything one module carries: type, on/off and its 6 parameter words.
+    pub fn block(&self, patch: usize, module: usize) -> Option<Block> {
+        let p = self.patch(patch)?;
+        if module >= MODULE_COUNT {
+            return None;
+        }
+        let mut params = [0u16; PARAMS_PER_MODULE];
+        for (i, v) in params.iter_mut().enumerate() {
+            *v = p.param(module, i).unwrap_or(0);
+        }
+        Some(Block {
+            module,
+            unit: p.unit(module),
+            on: p.is_on(module),
+            params,
+        })
+    }
+
+    /// Paste a block into the same module of another preset. A block only fits
+    /// the module it came from (an amp block is meaningless in the reverb slot).
+    pub fn set_block(&mut self, patch: usize, block: &Block) -> bool {
+        if patch >= PATCH_COUNT || block.module >= MODULE_COUNT {
+            return false;
+        }
+        self.set_unit(patch, block.module, block.unit);
+        self.set_on(patch, block.module, block.on);
+        for (i, v) in block.params.iter().enumerate() {
+            self.set_param(patch, block.module, i, *v);
+        }
+        true
+    }
+
+    /// Indices of the bytes that differ from `other` inside preset `patch`.
+    pub fn diff_offsets(&self, other: &PresetTable, patch: usize) -> Vec<usize> {
+        match (self.patch(patch), other.patch(patch)) {
+            (Some(a), Some(b)) => (0..PATCH_LEN).filter(|i| a.raw()[*i] != b.raw()[*i]).collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Move the module at chain position `from` to position `to`, shifting the
+    /// ones in between (drag-and-drop semantics, unlike a swap).
+    pub fn move_chain_position(&mut self, patch: usize, from: usize, to: usize) -> bool {
+        let Some(p) = self.patch(patch) else { return false };
+        if from >= MODULE_COUNT || to >= MODULE_COUNT {
+            return false;
+        }
+        let mut chain = p.chain().to_vec();
+        let m = chain.remove(from);
+        chain.insert(to, m);
+        let mut out = [0u8; MODULE_COUNT];
+        out.copy_from_slice(&chain);
+        self.set_chain(patch, out)
     }
 
     pub fn to_preset(&self) -> super::preset::Preset {
@@ -332,6 +453,55 @@ mod tests {
         assert!(t.import(9, &exported).is_ok());
         assert_eq!(t.patch(9).unwrap().param(1, 0), Some(11));
         assert!(t.import(9, &[1, 2, 3]).is_err());
+    }
+
+    #[test]
+    fn block_copy_paste_and_diff() {
+        let mut t = table();
+        t.set_unit(0, 4, 3);
+        t.set_on(0, 4, true);
+        t.set_param(0, 4, 1, 42);
+        let block = t.block(0, 4).unwrap();
+        assert_eq!(block.params[1], 42);
+        let before = t.clone();
+        assert!(t.set_block(7, &block));
+        assert_eq!(t.block(7, 4), Some(block));
+        let diff = t.diff_offsets(&before, 7);
+        assert!(diff.contains(&(UNIT_OFFSET + 4)));
+        assert!(diff.contains(&(ON_OFFSET + 4)));
+        assert!(diff.contains(&Patch::param_offset(4, 1)));
+        assert!(t.diff_offsets(&before, 0).is_empty());
+    }
+
+    #[test]
+    fn move_chain_shifts_instead_of_swapping() {
+        let mut t = table();
+        // [0, 1, 5, 2, 3, 4]: drag position 5 (module 4) to the front.
+        assert!(t.move_chain_position(0, 5, 0));
+        assert_eq!(t.patch(0).unwrap().chain(), [4, 0, 1, 5, 2, 3]);
+        assert!(t.move_chain_position(0, 0, 5));
+        assert_eq!(t.patch(0).unwrap().chain(), [0, 1, 5, 2, 3, 4]);
+    }
+
+    #[test]
+    fn validation_rejects_broken_presets() {
+        let f = PresetTable::factory();
+        assert!(f.validate().is_ok());
+        let good = f.patch(0).unwrap().raw().to_vec();
+        assert!(validate_patch(&good).is_ok());
+        let mut bad = good.clone();
+        bad[2] = 90; // chain byte out of range
+        assert!(validate_patch(&bad).is_err());
+        let mut bad = good.clone();
+        bad[UNIT_OFFSET + 2] = 7; // 8th modulation does not exist
+        assert!(validate_patch(&bad).is_err());
+        let mut t = f.clone();
+        assert!(t.import(0, &bad).is_err());
+        assert_eq!(t, f, "a refused import leaves the table alone");
+        // Accessors never panic on garbage module indices.
+        let p = f.patch(0).unwrap();
+        assert!(!p.is_on(90));
+        assert_eq!(p.unit(90), 0);
     }
 
     #[test]

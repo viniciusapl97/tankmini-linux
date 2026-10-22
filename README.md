@@ -11,7 +11,10 @@ built on a reverse-engineered USB-MIDI protocol instead of the official M-EFCS a
 | Identity / version query | verified (`TANK MINI_004`) |
 | Read the preset block (1942 B) | verified |
 | Active slot query + slot select | verified |
-| Cab/amp name table (20 × 14 B) | verified |
+| Cab name table (t5 `0x80000000`) and amp name table (t5 `0x90000000`) | verified |
+| Edit buffer (t4 `0x10000000`): live edit, field writes | verified (read, write, stored table untouched) |
+| Global bypass (t4 `0x20000002`) | verified |
+| Amp/IR upload | described from the app (`docs/protocol/app-findings.md`), not tried |
 | Block write (173-byte chunks, ACK, read-back verify) | verified (RAM only) |
 | Save to flash (`WRITE 0xF0000000`, empty body) | verified across a power cycle; `tankmini save` + GUI |
 | Preset table structure (21 × 92 B, chain, 36 params) | verified, see `docs/protocol/preset-map.md` |
@@ -20,8 +23,34 @@ built on a reverse-engineered USB-MIDI protocol instead of the official M-EFCS a
 | Export / import a single preset (`.tankmini`, 92 B) | working in GUI and CLI, with backup + commit |
 | Copy a preset to another slot | working (`tankmini copy`, GUI menu) |
 | Factory reset (embedded factory table) | working (`tankmini factory`, GUI menu, with confirmation) |
-| CLI (`tankmini`) | devices, identify, dump, show, patch, slot, apply, restore, backups, names, save, name, export, import, copy, factory, raw |
-| GTK4 app (`tankmini-gui`) | running: preset list, 6-chain editor, 36 sliders per preset, backup/restore, hex tab |
+| CLI (`tankmini`) | devices, identify, dump, show, patch, slot, apply, restore, backups, names, save, name, export, import, copy, factory, bypass, library, templates, raw; `--json` |
+| GTK4 + libadwaita app (`tankmini-gui`) | see below |
+
+## The app
+
+Spec: `docs/specs/0002-beginner-and-pro.md`.
+
+- **Tocar** (beginners): the playing preset, four big knobs (Volume, Drive,
+  Brilho, Ambiente), quick on/off per effect, "Sons prontos" per instrument
+  (guitarra, violão, baixo), first-run assistant, pedal guide.
+- **Editar** (advanced): the blocks drawn as a pedalboard of stompboxes
+  (LED, footswitch, click the logo to swap the model), drag-and-drop signal chain, every block with all
+  parameters (real units for cab cuts), copy/paste a block, per-preset VOL,
+  bytes panel with unsaved bytes highlighted.
+- **Live edit**: changes play immediately through the pedal's edit buffer;
+  "Salvar na pedaleira" backs up, writes, verifies and commits.
+- Undo/redo, A/B against the saved version, global bypass, unlimited local
+  library with tags and favourites, setlists written to consecutive slots,
+  backup browser, hot-plug and footswitch follow, permission diagnosis,
+  dark/light/system theme, preferences, keyboard shortcuts (Ctrl+?).
+
+```bash
+./install.sh                                       # ~/.local/bin + menu entry
+cargo run --release -p tankmini-gui
+TANKMINI_INSTANCE=dev cargo run -p tankmini-gui   # second, independent instance
+TANKMINI_DEMO=0 cargo run -p tankmini-gui         # no USB: factory table, 1A playing
+cargo run -p tankmini-core --example live_probe   # hardware check of live edit
+```
 
 ## Hardware
 

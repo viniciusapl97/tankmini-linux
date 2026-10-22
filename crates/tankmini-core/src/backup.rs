@@ -14,11 +14,7 @@ pub struct BackupStore {
 impl BackupStore {
     /// `$XDG_DATA_HOME/tankmini/backups` (falls back to `~/.local/share`).
     pub fn default_root() -> PathBuf {
-        let base = std::env::var_os("XDG_DATA_HOME")
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
-            .unwrap_or_else(|| PathBuf::from("."));
-        base.join("tankmini/backups")
+        crate::paths::data_dir().join("backups")
     }
 
     pub fn new(root: impl Into<PathBuf>) -> Self {
@@ -54,6 +50,21 @@ impl BackupStore {
         Preset::from_raw(raw)
     }
 
+    /// Newest first, with the metadata written next to each block.
+    pub fn list_info(&self) -> io::Result<Vec<BackupInfo>> {
+        Ok(self.list()?.into_iter().map(|p| BackupInfo::read(&p)).collect())
+    }
+
+    /// Delete a backup and its metadata file. Only paths inside this store.
+    pub fn delete(&self, path: &Path) -> io::Result<()> {
+        if path.parent() != Some(self.root.as_path()) {
+            return Err(io::Error::other("backup fora da pasta de backups"));
+        }
+        fs::remove_file(path)?;
+        let _ = fs::remove_file(path.with_extension("txt"));
+        Ok(())
+    }
+
     /// Newest first.
     pub fn list(&self) -> io::Result<Vec<PathBuf>> {
         if !self.root.exists() {
@@ -67,6 +78,40 @@ impl BackupStore {
         bins.sort();
         bins.reverse();
         Ok(bins)
+    }
+}
+
+/// What we know about one backup file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackupInfo {
+    pub path: PathBuf,
+    pub timestamp: u64,
+    pub slot: Option<u8>,
+    pub note: String,
+}
+
+impl BackupInfo {
+    fn read(path: &Path) -> Self {
+        let meta = fs::read_to_string(path.with_extension("txt")).unwrap_or_default();
+        let field = |k: &str| {
+            meta.lines()
+                .find_map(|l| l.strip_prefix(k).and_then(|r| r.strip_prefix('=')))
+                .map(str::trim)
+                .unwrap_or("")
+                .to_string()
+        };
+        let stem_ts = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .and_then(|s| s.split('-').next())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        Self {
+            path: path.to_path_buf(),
+            timestamp: field("timestamp").parse().unwrap_or(stem_ts),
+            slot: field("slot").parse().ok(),
+            note: field("note"),
+        }
     }
 }
 
@@ -84,6 +129,13 @@ mod tests {
         let loaded = BackupStore::load(&path).unwrap();
         assert_eq!(loaded, preset);
         assert_eq!(store.list().unwrap().len(), 1);
+        let info = &store.list_info().unwrap()[0];
+        assert_eq!(info.slot, Some(3));
+        assert_eq!(info.note, "unit test");
+        assert!(info.timestamp > 0);
+        assert!(store.delete(Path::new("/etc/passwd")).is_err());
+        store.delete(&path).unwrap();
+        assert!(store.list().unwrap().is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

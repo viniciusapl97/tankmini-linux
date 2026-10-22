@@ -60,8 +60,13 @@ Queries with empty body are `00 59 <cmd> 00 00 00 ff`.
 | Address | Len | Meaning |
 |---|---|---|
 | `0x0000` | 1942 | live preset block for the active slot, ends with ASCII `PATCHEND\0\0` at `0x078c` (**verified**) |
-| `0x20000000` | 1 | active slot index, 0-based (**verified**; returned `01`, then `00` after select) |
-| `0xE0000000 + i` | 1 (write `[i]`) | select slot `i`; ACKed and the active-slot byte follows (**verified**) |
+| `0x0000 + i*92` | 92 | one stored preset (**verified**) |
+| `0x10000000` | 92 | **edit buffer**: the preset that is playing. Reading it returns the active preset byte for byte; field writes (`0x10000000 + offset`, any length up to 92) are ACKed and leave the stored table untouched (**verified** 2026-10-22). This is the official app's live-edit path (**from app**, `sendPatchField`), see `app-findings.md` §1 |
+| `0x20000000` | 4 | glob: `[active slot, ?, bypass, ?]` (**verified** read; observed `02 02 00 00`) |
+| `0x20000002` | 1 (write `[0/1]`) | global bypass; read-back follows the write (**verified**) |
+| `0xD0000000` | 1 (write `[0/1]`) | USB loopback (**from app**, write-only, not read back by anyone) |
+| `0xE0000000 + i` | 1 (write `[i]`) | select slot `i`; ACKed and the active-slot byte follows (**verified**; the app sends `[0x01]` instead, both work) |
+| `0xF0000000` | 0 (empty write) | commit the table to flash (**verified** across a power cycle) |
 
 Reads past the preset window return stale RAM, not zeroes: the same parameter
 fragments reappear at unrelated addresses (e.g. `0x4000` echoes bytes that also
@@ -127,6 +132,13 @@ still has to be tested.
    not been found yet.
 4. All 21 records are untouched by switching slots, which is what rules out
    "the block is the whole 21-preset library".
+
+## 7c. Timing (**verified** 2026-10-22)
+
+A reply is complete as soon as its SysEx closes and the frame inside parses;
+waiting for a fixed timeout is unnecessary. With early return: identity ≈ 6 ms,
+the whole 1942-byte table ≈ 100 ms, one edit-buffer write ≈ 5 ms including
+process start. Live edit can follow a knob at full speed.
 
 ## 8. Open questions
 

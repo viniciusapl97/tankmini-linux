@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=TANK MINI
+GenericName=Pedaleira
+Comment=Controle a pedaleira M-VAVE TANK MINI
+Exec=tankmini-gui
+Icon=audio-x-generic
+Terminal=false
+Categories=AudioVideo;Audio;Music;
+Keywords=guitarra;pedaleira;efeitos;m-vave;tank;
+StartupWMClass=dev.v1ni.TankMini
