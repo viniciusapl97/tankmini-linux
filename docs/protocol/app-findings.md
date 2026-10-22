@@ -481,3 +481,31 @@ reading the pedal over USB. **verified** unless marked.
   pedal's USB side (`rawmidi drain error`, then `device descriptor read/64,
   error -110` on replug) until a full power cycle. 128-byte writes and
   512-byte reads work. The RAM buffer is cleared by a power cycle.
+
+## 13. AMP model files on firmware 004 (2026-10-22, on the device)
+
+Same method as §12: the official app auditioned a community `.am4data`
+(`VOX AC30 CLEAN AM4`, 7868 bytes) and the pedal's type 5 buffer was read
+back over USB in 512-byte blocks.
+
+- The pedal's own amp slots (type 5 `0x70000000 + s*0x2000`) hold `AM2`
+  records (`AM2\0` + name + …), like the factory `am3` blob. The app still
+  accepted an `AM4` file for this pedal and auditioned it without an error.
+  **Whether an AM4 model plays correctly on this firmware is not known yet.**
+- Audition = the file **verbatim** at type 5 `0x0`, followed by a 68-byte
+  `LMT` block: `"LMT\0"` + 16 little-endian floats (**verified**, buffer
+  read-back).
+- The `LMT` block is computed by `calc_bias_gru_am4` (AM4; `calc_bias_gru`
+  with weights at +0x43c for the older format) in `libamx_parser_lib.so`:
+  - the model is a GRU with 16 hidden units run in Q21 fixed point with
+    tanh/sigmoid lookup tables (`ANN_Unit_proc`); weights are read as floats
+    from the file (+0x83c for AM4) and scaled to Q21;
+  - it feeds `expf(i * -6.908 / 22050)` for i = 0..44099 (a one-second decay
+    from 1 to ~0.001);
+  - the final hidden state × 2⁻²¹ is the LMT payload (a warm start state).
+  - `tools/lmt_reference.py` runs the original library under Unicorn and
+    reproduces the app's LMT for that file **byte for byte**.
+- Community API (public, no login): `POST /bbs/api/getlist` with
+  `{"search","select":[],"sort":1,"currentPage","pageSize"}`; download with
+  `GET /bbs/api/download?articleId=<id>&file=<title>`. On 2026-10-22 it served
+  9 AM4, 1 AM3 and 2 WAV IR posts.
