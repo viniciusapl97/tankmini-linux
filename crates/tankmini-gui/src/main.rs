@@ -421,7 +421,7 @@ fn refresh(ui: &Ui, state: &Shared, suppress: &Rc<Cell<bool>>) {
                     }
                 }
                 for (pos, module) in chain.iter().enumerate() {
-                    let card = module_card(state, suppress, st.selected, pos, *module as usize, &patch, &st.names);
+                    let card = module_card(state, suppress, ui, st.selected, pos, *module as usize, &patch, &st.names);
                     ui.modules_box.append(&card);
                 }
                 ui.hex_view.buffer().set_text(&hexdump(patch.raw()));
@@ -438,6 +438,7 @@ fn refresh(ui: &Ui, state: &Shared, suppress: &Rc<Cell<bool>>) {
 fn module_card(
     state: &Shared,
     suppress: &Rc<Cell<bool>>,
+    ui: &Ui,
     patch_index: usize,
     position: usize,
     module: usize,
@@ -514,6 +515,43 @@ fn module_card(
     }
     head.append(&titles);
     head.append(&spacer);
+
+    // Chain reordering: the pedal lets you change the order of the six blocks.
+    let arrows = GtkBox::new(Orientation::Vertical, 0);
+    arrows.set_valign(gtk::Align::Center);
+    let up = gtk::Button::from_icon_name("go-up-symbolic");
+    up.add_css_class("flat");
+    up.set_tooltip_text(Some("Mover este bloco para antes do anterior"));
+    up.set_sensitive(position > 0);
+    let down = gtk::Button::from_icon_name("go-down-symbolic");
+    down.add_css_class("flat");
+    down.set_tooltip_text(Some("Mover este bloco para depois do próximo"));
+    down.set_sensitive(position + 1 < MODULE_COUNT);
+    {
+        let state = state.clone();
+        let suppress = suppress.clone();
+        let ui_c = ui.clone();
+        up.connect_clicked(move |_| {
+            if let Some(t) = state.borrow_mut().table.as_mut() {
+                t.swap_chain_positions(patch_index, position, position - 1);
+            }
+            refresh(&ui_c, &state, &suppress);
+        });
+    }
+    {
+        let state = state.clone();
+        let suppress = suppress.clone();
+        let ui_c = ui.clone();
+        down.connect_clicked(move |_| {
+            if let Some(t) = state.borrow_mut().table.as_mut() {
+                t.swap_chain_positions(patch_index, position, position + 1);
+            }
+            refresh(&ui_c, &state, &suppress);
+        });
+    }
+    arrows.append(&up);
+    arrows.append(&down);
+    head.append(&arrows);
     head.append(&enabled);
     body.append(&head);
 
