@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # The minimum supported toolkit: GTK 4.14 / libadwaita 1.5, from the distro packages.
+  ubuntu-24-04:
+    name: Ubuntu 24.04 (GTK 4.14, libadwaita 1.5)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain and Gtk
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libgtk-4-dev libadwaita-1-dev libpango1.0-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Report toolkit versions
+        run: pkg-config --modversion gtk4 libadwaita-1
+      - name: Tests (no hardware needed)
+        run: cargo test --workspace
+      - name: Build release binaries
+        run: cargo build --release -p tankmini-cli -p tankmini-gui
+      - name: Smoke test the CLI
+        run: ./target/release/tankmini devices
+
+  # A different family on purpose: rolling-ish distro, dnf, newer toolkit.
+  fedora:
+    name: Fedora (dnf, newer toolkit)
+    runs-on: ubuntu-24.04
+    container: fedora:latest
+    steps:
+      - name: Install toolchain and Gtk
+        run: |
+          dnf install -y gcc gcc-c++ make pkgconf-pkg-config git \
+            gtk4-devel libadwaita-devel
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Report toolkit versions
+        run: pkg-config --modversion gtk4 libadwaita-1
+      - name: Build release binaries
+        run: cargo build --release -p tankmini-cli -p tankmini-gui
