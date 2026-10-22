@@ -89,7 +89,7 @@ pub fn pedal(app: &AppRef, position: usize, module: usize, realistic: bool) -> g
     }
     // Narrower minimum so the board can reflow to two or one column on small
     // windows instead of forcing a horizontal overflow.
-    body.set_size_request(if realistic { 260 } else { 196 }, -1);
+    body.set_size_request(if realistic { 240 } else { 196 }, -1);
     // Let the card take the width its column gives it, so the board fills the
     // page instead of leaving a dead band on the right.
     body.set_hexpand(true);
@@ -109,12 +109,12 @@ pub fn pedal(app: &AppRef, position: usize, module: usize, realistic: bool) -> g
         }
     }
     led.set_halign(gtk::Align::Center);
-    led.set_margin_top(if realistic { 16 } else { 4 });
+    led.set_margin_top(if realistic { 10 } else { 4 });
     led.set_tooltip_text(Some(if on { "Ligado" } else { "Desligado" }));
     body.append(&led);
 
     // Knobs.
-    let knobs = param_knobs(app, module, if realistic { KnobSize::Pedal } else { KnobSize::Mini });
+    let knobs = param_knobs(app, module, KnobSize::Mini);
     if knobs.is_empty() {
         let none = label("sem ajustes", &["tm-pedal-print", "tm-pedal-role"]);
         none.set_halign(gtk::Align::Center);
@@ -125,7 +125,7 @@ pub fn pedal(app: &AppRef, position: usize, module: usize, realistic: bool) -> g
         grid.set_halign(gtk::Align::Center);
         grid.set_column_spacing(4);
         grid.set_row_spacing(2);
-        grid.set_margin_top(if realistic { 8 } else { 4 });
+        grid.set_margin_top(if realistic { 6 } else { 4 });
         // Two knob rows for every block keeps the cards the same height, which is
         // what lets two rows of cards fit without scrolling.
         let cols = if realistic {
@@ -145,14 +145,14 @@ pub fn pedal(app: &AppRef, position: usize, module: usize, realistic: bool) -> g
     let logo = gtk::MenuButton::new();
     logo.add_css_class("tm-pedal-logo");
     logo.set_halign(gtk::Align::Center);
-    logo.set_margin_top(if realistic { 14 } else { 4 });
+    logo.set_margin_top(if realistic { 8 } else { 4 });
     let logo_box = vbox(0);
     let title = label(&name, &[if realistic { "tm-pedal-name" } else { "tm-title-l" }]);
     title.set_xalign(0.5);
     title.set_ellipsize(gtk::pango::EllipsizeMode::End);
     // A long model name must not widen the whole card: the board columns depend on
     // the widest card, so the name ellipsizes to a fixed budget.
-    title.set_max_width_chars(if realistic { 16 } else { 10 });
+    title.set_max_width_chars(if realistic { 14 } else { 10 });
     logo_box.append(&title);
     let sub_row = hbox(4);
     sub_row.set_halign(gtk::Align::Center);
@@ -187,7 +187,7 @@ pub fn pedal(app: &AppRef, position: usize, module: usize, realistic: bool) -> g
     let stomp = gtk::Button::new();
     stomp.add_css_class("tm-footswitch");
     stomp.set_halign(gtk::Align::Center);
-    stomp.set_margin_top(16);
+    stomp.set_margin_top(10);
     stomp.set_tooltip_text(Some(if on { "Pisar para desligar" } else { "Pisar para ligar" }));
     {
         let app = app.clone();
@@ -200,8 +200,8 @@ pub fn pedal(app: &AppRef, position: usize, module: usize, realistic: bool) -> g
     body.append(&stomp);
     let state = label(if on { "ON" } else { "OFF" }, &["tm-pedal-role"]);
     state.set_halign(gtk::Align::Center);
-    state.set_margin_top(6);
-    state.set_margin_bottom(18);
+    state.set_margin_top(4);
+    state.set_margin_bottom(10);
     body.append(&state);
 
     // Corner screws over the enclosure.

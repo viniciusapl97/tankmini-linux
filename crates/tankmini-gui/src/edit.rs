@@ -414,13 +414,18 @@ pub(crate) fn param_knobs(app: &AppRef, module: usize, size: KnobSize) -> Vec<Kn
     for param in 0..PARAMS_PER_MODULE {
         let value = p.param(module, param).unwrap_or(0);
         let raw_name = catalog::param_name(role, unit, param);
-        if raw_name.is_none() && !show_all && value == 0 {
+        // Six slots per block, but a model uses as many parameters as it declares.
+        // The remaining slots keep leftover values: never show them as if they were
+        // real knobs — only in "show everything" mode, and clearly labelled.
+        if raw_name.is_none() && !show_all {
             continue;
         }
         let text = st
             .param_label(role, unit, param)
-            .unwrap_or_else(|| format!("Ajuste {}", param + 1));
-        let help = raw_name.map(catalog::param_help).unwrap_or(catalog::param_help(""));
+            .unwrap_or_else(|| format!("slot {} (residual)", param + 1));
+        let help = raw_name.map(catalog::param_help).unwrap_or(
+            "Não usado por este modelo. Guarda um valor residual no preset; mudar aqui não              costuma ter efeito.",
+        );
         let offset = Patch::param_offset(module, param);
         let tip = if st.settings.show_advanced {
             format!("{help}\nbyte 0x{offset:02x} (u16 LE) · valor {value}")
