@@ -120,7 +120,7 @@ headerbar.tm-header {
 }
 .tm-card.off { opacity: 0.5; }
 .tm-card-head { padding: 14px 16px 6px 18px; }
-.tm-card-body { padding: 6px 16px 16px 16px; }
+.tm-card-body { padding: 4px 14px 12px 14px; }
 .tm-family { min-width: 10px; min-height: 10px; border-radius: 99px; }
 .fam-fx  { background: @tm_fam_fx; }
 .fam-amp { background: @tm_fam_amp; }

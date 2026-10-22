@@ -51,7 +51,11 @@ pub fn pedal(app: &AppRef, position: usize, module: usize, realistic: bool) -> g
     }
     // Narrower minimum so the board can reflow to two or one column on small
     // windows instead of forcing a horizontal overflow.
-    body.set_size_request(if realistic { 280 } else { 230 }, -1);
+    body.set_size_request(if realistic { 260 } else { 230 }, -1);
+    // Let the card take the width its column gives it, so the board fills the
+    // page instead of leaving a dead band on the right.
+    body.set_hexpand(true);
+    body.set_halign(gtk::Align::Fill);
 
     let led = hbox(0);
     if realistic {
@@ -239,16 +243,33 @@ fn enclosure_class(role: Role) -> &'static str {
 pub fn board(app: &AppRef, realistic: bool) -> gtk::FlowBox {
     let flow = gtk::FlowBox::new();
     flow.set_selection_mode(gtk::SelectionMode::None);
-    flow.set_homogeneous(false);
+    flow.set_homogeneous(true);
     flow.set_min_children_per_line(1);
     flow.set_max_children_per_line(6);
-    flow.set_column_spacing(22);
-    flow.set_row_spacing(26);
+    flow.set_column_spacing(14);
+    flow.set_row_spacing(18);
     flow.set_valign(gtk::Align::Start);
-    flow.set_halign(gtk::Align::Center);
+    // Fill the page instead of shrinking to a centred natural width: this is what
+    // lets the board use a third column once there is room for it.
+    flow.set_halign(gtk::Align::Fill);
+    flow.set_hexpand(true);
     let chain = app.state.borrow().current().unwrap().chain();
+    let mut first = None;
     for (pos, module) in chain.iter().enumerate() {
-        flow.insert(&pedal(app, pos, *module as usize, realistic), -1);
+        let card = pedal(app, pos, *module as usize, realistic);
+        if first.is_none() {
+            first = Some(card.clone());
+        }
+        flow.insert(&card, -1);
+    }
+    if std::env::var_os("TM_DEBUG_MEASURE").is_some() {
+        if let Some(card) = first {
+            gtk::glib::idle_add_local_once(move || {
+                let (cmin, cnat, _, _) = card.measure(gtk::Orientation::Horizontal, -1);
+                let (hmin, _, _, _) = card.measure(gtk::Orientation::Vertical, 300);
+                eprintln!("[measure] card: min_w={cmin} nat_w={cnat} min_h_at300={hmin}");
+            });
+        }
     }
     flow
 }

@@ -19,6 +19,8 @@ const SWEEP: f64 = 1.5 * PI;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum KnobSize {
     Regular,
+    /// Compact knob for grid cards, where horizontal room is scarce.
+    Compact,
     Large,
     /// A stompbox knob: black cap, printed scale, label printed below.
     Pedal,
@@ -28,6 +30,7 @@ impl KnobSize {
     fn dims(self) -> (i32, i32, f64) {
         match self {
             KnobSize::Regular => (84, 104, 1.0),
+            KnobSize::Compact => (68, 86, 1.0),
             KnobSize::Large => (148, 178, 1.75),
             KnobSize::Pedal => (106, 134, 1.0),
         }

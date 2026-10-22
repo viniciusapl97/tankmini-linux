@@ -92,7 +92,16 @@ fn chain_strip(app: &AppRef) -> gtk::Box {
     strip.set_column_spacing(4);
     strip.set_row_spacing(6);
     strip.add_css_class("tm-chain");
-    wrap.append(&strip);
+    // Keep the signal path on a single line: a wrap in the middle of the chain
+    // reads as if the order changed.
+    let strip_scroll = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Automatic)
+        .vscrollbar_policy(gtk::PolicyType::Never)
+        .min_content_width(0)
+        .propagate_natural_height(true)
+        .child(&strip)
+        .build();
+    wrap.append(&strip_scroll);
 
     let st = app.state.borrow();
     let p = st.current().unwrap();
@@ -175,7 +184,11 @@ fn cards(app: &AppRef) -> gtk::Box {
     flow.set_selection_mode(gtk::SelectionMode::None);
     flow.set_homogeneous(true);
     flow.set_min_children_per_line(1);
-    flow.set_max_children_per_line(2);
+    // Three columns when the window is wide; the FlowBox falls back to two and
+    // then one on its own because each card has a 280 px minimum.
+    flow.set_max_children_per_line(3);
+    flow.set_hexpand(true);
+    flow.set_halign(gtk::Align::Fill);
     flow.set_column_spacing(14);
     flow.set_row_spacing(14);
     flow.set_valign(gtk::Align::Start);
@@ -238,9 +251,10 @@ fn card(app: &AppRef, position: usize, module: usize) -> gtk::Box {
 
     let body = vbox(10);
     body.add_css_class("tm-card-body");
-    if let Some(dropdown) = variant_dropdown(app, module) {
-        body.append(&dropdown);
-    }
+    // The header of the card already carries the block menu with the model list,
+    // so the body stays for knobs only: a second dropdown cost ~50 px of height
+    // per card and duplicated the same choice.
+    let _ = &module;
 
     let knobs = gtk::FlowBox::new();
     knobs.set_selection_mode(gtk::SelectionMode::None);
@@ -249,7 +263,7 @@ fn card(app: &AppRef, position: usize, module: usize) -> gtk::Box {
     knobs.set_column_spacing(4);
     knobs.set_row_spacing(4);
     knobs.set_homogeneous(true);
-    let list = param_knobs(app, module, KnobSize::Regular);
+    let list = param_knobs(app, module, KnobSize::Compact);
     if list.is_empty() {
         body.append(&label("Este bloco não tem ajustes conhecidos.", &["tm-small", "tm-faint"]));
     } else {

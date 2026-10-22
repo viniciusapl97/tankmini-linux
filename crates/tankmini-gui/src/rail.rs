@@ -173,13 +173,19 @@ fn library(app: &AppRef) {
             sub.push_str(" · ");
             sub.push_str(&e.tags.join(", "));
         }
-        let sub = label(&sub, &["tm-row-sub"]);
+        let sub_text = sub.clone();
+        let sub = label(&sub_text, &["tm-row-sub"]);
         sub.set_ellipsize(gtk::pango::EllipsizeMode::End);
         texts.append(&title);
         texts.append(&sub);
-        if !e.notes.is_empty() {
-            row.set_tooltip_text(Some(&e.notes));
-        }
+        // The title and subtitle ellipsize in a narrow rail: keep the full text
+        // reachable through a tooltip.
+        let tip = if e.notes.is_empty() {
+            format!("{} — {}", e.name, sub_text)
+        } else {
+            format!("{} — {}\n{}", e.name, sub_text, e.notes)
+        };
+        row.set_tooltip_text(Some(&tip));
         let star = gtk::ToggleButton::new();
         star.set_icon_name(if e.favorite { "starred-symbolic" } else { "non-starred-symbolic" });
         star.set_active(e.favorite);
