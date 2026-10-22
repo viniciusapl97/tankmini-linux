@@ -5,6 +5,7 @@
 //! the verified/unverified status of each claim.
 
 pub mod backup;
+pub mod catalog;
 pub mod device;
 pub mod discovery;
 pub mod frame;

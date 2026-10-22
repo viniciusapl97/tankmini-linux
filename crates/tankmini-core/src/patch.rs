@@ -24,6 +24,8 @@
 
 pub const PATCH_LEN: usize = 92;
 pub const PATCH_COUNT: usize = 21;
+pub const ON_OFFSET: usize = 0x08;
+pub const UNIT_OFFSET: usize = 0x0e;
 pub const PARAM_OFFSET: usize = 0x14;
 pub const MODULE_COUNT: usize = 6;
 pub const PARAMS_PER_MODULE: usize = 6;
@@ -84,6 +86,35 @@ impl<'a> Patch<'a> {
 
     pub fn byte(&self, offset: usize) -> u8 {
         self.raw[offset]
+    }
+
+    /// Module `slot` on/off byte (`0x08 + slot`, verified via the app accessor).
+    pub fn is_on(&self, slot: usize) -> bool {
+        self.raw[ON_OFFSET + slot] != 0
+    }
+
+    /// Module `slot` unit/type byte (`0x0e + slot`, verified via the app accessor).
+    pub fn unit(&self, slot: usize) -> u8 {
+        self.raw[UNIT_OFFSET + slot]
+    }
+
+    /// What the module in `slot` does (inferred slot→role binding).
+    pub fn role(&self, slot: usize) -> crate::catalog::Role {
+        crate::catalog::Role::for_slot(slot)
+    }
+
+    /// Display name of the effect in `slot`, using the device cab/amp table for
+    /// amp and cabinet slots.
+    pub fn effect_name<'b>(&self, slot: usize, names: &'b [String]) -> String {
+        let role = self.role(slot);
+        let unit = self.unit(slot) as usize;
+        match role {
+            crate::catalog::Role::Amp | crate::catalog::Role::Cabinet => names
+                .get(unit)
+                .cloned()
+                .unwrap_or_else(|| format!("{} {}", role.label(), unit + 1)),
+            other => crate::catalog::catalog_name(other, unit as u8),
+        }
     }
 
     /// Parameter value (0..100 observed).
@@ -158,6 +189,22 @@ impl PresetTable {
             return false;
         }
         self.raw[patch * PATCH_LEN + offset] = value;
+        true
+    }
+
+    pub fn set_unit(&mut self, patch: usize, slot: usize, unit: u8) -> bool {
+        if patch >= PATCH_COUNT || slot >= MODULE_COUNT {
+            return false;
+        }
+        self.raw[patch * PATCH_LEN + UNIT_OFFSET + slot] = unit;
+        true
+    }
+
+    pub fn set_on(&mut self, patch: usize, slot: usize, on: bool) -> bool {
+        if patch >= PATCH_COUNT || slot >= MODULE_COUNT {
+            return false;
+        }
+        self.raw[patch * PATCH_LEN + ON_OFFSET + slot] = u8::from(on);
         true
     }
 

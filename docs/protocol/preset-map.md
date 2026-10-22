@@ -30,11 +30,40 @@ active preset.
 |---|---|---|---|
 | `0x00` | 2 | patch id (observed `0x3a`–`0x61`); changes with content | verified raw, meaning unknown |
 | `0x02` | 6 | **chain**: signal order of the 6 modules, always a permutation of `0..5` | verified (all 21 presets are permutations) |
-| `0x08` | 6 | one flag byte per module, values `0`, `1`, `2` | inferred (enable/bypass) |
-| `0x0e` | 1 | `0`–`2` | unknown |
-| `0x0f` | 1 | `0`–`19` across the factory presets — the range of the 20 preamp models | inferred |
-| `0x10` | 4 | small values, `0`–`0x13` | unknown |
-| `0x14` | 72 | **36 parameters**, u16 LE, every observed value in `0..100` | verified (range) |
+| `0x08` | 6 | **on/off per module** | **verified** (`getEffOnAt` = byte `0x08+i`) |
+| `0x0e` | 6 | **module type ("unit") per module** | **verified** (`getEffUnitAt` = byte `0x0e+i`) |
+| `0x14` | 72 | **36 parameters**, u16 LE, `0..100` | **verified** (`getEffParaAt` = `0x14 + i*12 + p*2`) |
+
+The accessor formulas come from the app's own `TankMiniData`
+(`getEffOnAt`, `getEffUnitAt`, `getEffParaAt`, recovered with Blutter) and match
+the device dump exactly: offset `0x14 + 5*12 + 5*2 + 2 = 0x5c` is the end of the
+preset.
+
+### Module roles (inferred from unit ranges)
+
+The six type bytes hold, in every factory preset, values whose maxima are exactly
+the counts the manual documents, which pins each slot to a role:
+
+| Slot | Type byte | Values seen | Role | Count in manual |
+|---|---|---|---|---|
+| 0 | `0x0e` | 0–2 | dinâmica (gate / boost / comp) | noise gate, boost, compressor |
+| 1 | `0x0f` | 0–19 | **amp** (preamp model) | 20 preamps |
+| 2 | `0x10` | 0–6 | **modulação** | 7 modulations |
+| 3 | `0x11` | 0–4 | **delay** | 5 delays |
+| 4 | `0x12` | 0–5 | **reverb** | 6 reverbs |
+| 5 | `0x13` | 0–19 | **cabinet / IR** | 20 IR CAB slots |
+
+Amp and cabinet type bytes index the 20-entry name table of §4 — that is where
+`Mess Bog`, `FGLProV30s`, … come from in the UI.
+
+### Parameter names
+
+| Module | Where the names come from |
+|---|---|
+| modulação, delay, reverb | the app's `compact_effect_params.dart` lists, per variant, in wire order (**from app**) |
+| amp | `Gain, Bass, Mid, Treble, Pres, Level` (**from app**: `EffectParamDef` names; order inferred) |
+| dinâmica | `Threshold, Release, Level` / `Level, Tone` / `Sustain, Attack, Level` (**inferred**) |
+| cabinet | only `Level` is named; remaining slots are unnamed until confirmed (**inferred**) |
 
 `0x14 + 36*2 = 0x5c`, i.e. the parameter block fills the rest of the 92 bytes
 exactly (**verified**).
