@@ -1,5 +1,8 @@
 # TANK MINI for Linux
 
+[![CI](https://github.com/viniciusapl97/tankmini-linux/actions/workflows/ci.yml/badge.svg)](https://github.com/viniciusapl97/tankmini-linux/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 A native Linux app for the **M-VAVE TANK MINI** guitar/bass multi-effects pedal. It
 talks to the pedal over plain USB-MIDI, using a protocol reverse-engineered from the
 official M-EFCS Android app and confirmed byte by byte on real hardware.
