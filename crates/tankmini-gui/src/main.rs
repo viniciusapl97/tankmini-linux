@@ -8,6 +8,7 @@
 mod app;
 mod dialogs;
 mod edit;
+mod i18n;
 mod knob;
 mod pedal;
 mod play;
@@ -51,6 +52,7 @@ fn main() -> glib::ExitCode {
         if !app.state.borrow().settings.onboarded {
             let app = app.clone();
             glib::timeout_add_local_once(std::time::Duration::from_millis(600), move || {
+                i18n::init(i18n::Lang::detect());
                 dialogs::maybe_onboard(&app)
             });
         }

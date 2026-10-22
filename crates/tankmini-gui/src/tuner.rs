@@ -131,11 +131,8 @@ pub fn page(app: &AppRef, shared: &Shared) -> gtk::Widget {
     page.set_margin_end(24);
 
     let head = vbox(4);
-    head.append(&label("AFINADOR", &["tm-eyebrow"]));
-    head.append(&label(
-        "Toque uma corda solta. O app escuta a saída da pedaleira pelo cabo USB.",
-        &["tm-small", "tm-dim"],
-    ));
+    head.append(&label(crate::i18n::t("tuner.title"), &["tm-eyebrow"]));
+    head.append(&label(crate::i18n::t("tuner.hint"), &["tm-small", "tm-dim"]));
     page.append(&head);
 
     let note = label("—", &["tm-tune-note"]);
@@ -170,8 +167,8 @@ pub fn page(app: &AppRef, shared: &Shared) -> gtk::Widget {
 
     // Reference pitch: some records are tuned to A=432.
     let reference = adw::ActionRow::new();
-    reference.set_title("Referência");
-    reference.set_subtitle("Frequência do Lá acima do Dó central (A4)");
+    reference.set_title(crate::i18n::t("tuner.reference"));
+    reference.set_subtitle(crate::i18n::t("tuner.reference.sub"));
     let spin = gtk::SpinButton::with_range(415.0, 466.0, 0.5);
     spin.set_value(*shared.a4.lock().unwrap() as f64);
     spin.set_valign(gtk::Align::Center);
@@ -209,20 +206,25 @@ pub fn page(app: &AppRef, shared: &Shared) -> gtk::Widget {
             }
             let capturing = shared.capturing.load(Ordering::Relaxed);
             status.set_text(if capturing {
-                "capturando da pedaleira"
+                crate::i18n::t("tuner.capturing")
             } else {
-                "pedaleira não encontrada — verifique o cabo USB"
+                crate::i18n::t("tuner.no_device")
             });
             match shared.pitch.lock().ok().and_then(|p| p.clone()) {
                 Some(p) => {
                     note.set_text(&p.label());
                     string.set_text(
                         &pitch::nearest_string(&p)
-                            .map(|s| format!("corda {s}"))
+                            .map(|s| format!("{} {s}", crate::i18n::t("tuner.string")))
                             .unwrap_or_else(|| "—".into()),
                     );
                     cents.set_text(&format!("{:+.1} cents", p.cents));
-                    advice.set_text(p.advice().map(|a| a.to_string()).unwrap_or_else(|| "afinado".into()).as_str());
+                    let advice_text = match p.advice() {
+                        Some("aperte a corda") => crate::i18n::t("tuner.tighten"),
+                        Some("afrouxe a corda") => crate::i18n::t("tuner.loosen"),
+                        _ => crate::i18n::t("tuner.in_tune"),
+                    };
+                    advice.set_text(advice_text);
                     bar.set_value((50.0 + p.cents.clamp(-50.0, 50.0)) as f64);
                     hertz.set_text(&format!("{:.2} Hz", p.hz));
                     note.remove_css_class("tm-tune-flat");
@@ -238,7 +240,7 @@ pub fn page(app: &AppRef, shared: &Shared) -> gtk::Widget {
                 }
                 None => {
                     note.set_text("—");
-                    string.set_text(if capturing { "ouvindo…" } else { "" });
+                    string.set_text(if capturing { crate::i18n::t("tuner.listening") } else { "" });
                     cents.set_text("");
                     advice.set_text("");
                     hertz.set_text("");

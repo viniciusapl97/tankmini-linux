@@ -65,9 +65,9 @@ pub fn build(app: &AppRef) {
     modes.add_css_class("tm-modes");
     modes.add_css_class("round");
     for (name, text, tip) in [
-        ("play", "Tocar", "Sons prontos e controles simples (Ctrl+1)"),
-        ("edit", "Editar", "Todos os blocos e parâmetros (Ctrl+2)"),
-        ("tune", "Afinar", "Afinador cromático pela entrada USB (Ctrl+3)"),
+        ("play", crate::i18n::t("view.play"), "Sons prontos e controles simples (Ctrl+1)"),
+        ("edit", crate::i18n::t("view.edit"), "Todos os blocos e parâmetros (Ctrl+2)"),
+        ("tune", crate::i18n::t("view.tune"), "Afinador cromático pela entrada USB (Ctrl+3)"),
     ] {
         let t = crate::toggle::Toggle::new();
         t.set_name(Some(name));
