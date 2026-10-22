@@ -218,6 +218,12 @@ fn draw(
     let (w, h) = (w as f64, h as f64);
     let label_h = 22.0 * scale.sqrt();
     let radius = (w.min(h - label_h) / 2.0) - 5.0 * scale;
+    // Small knobs have no room for a face and pointer: the pointer would cut
+    // through the number. They get a slim ring with an end marker instead.
+    if radius < 30.0 {
+        draw_small(widget, cr, w, h, value, text, rgb, label, focused);
+        return;
+    }
     let cx = w / 2.0;
     let cy = radius + 5.0 * scale;
     let frac = (value / 100.0).clamp(0.0, 1.0);
@@ -392,5 +398,76 @@ fn draw_pedal(
     layout.set_alignment(pango::Alignment::Center);
     cr.move_to(0.0, cy + r + 31.0);
     cr.set_source_rgba(INK.0, INK.1, INK.2, 0.62);
+    pangocairo::functions::show_layout(cr, &layout);
+}
+
+/// Compact knob: slim 270° ring, a marker dot where the value ends, the value
+/// centred in tabular figures sized to the ring, the label underneath.
+#[allow(clippy::too_many_arguments)]
+fn draw_small(
+    widget: &gtk::DrawingArea,
+    cr: &gtk::cairo::Context,
+    w: f64,
+    h: f64,
+    value: f64,
+    text: &str,
+    rgb: (f64, f64, f64),
+    label: &str,
+    focused: bool,
+) {
+    let label_px = 11.0;
+    let ring = 3.0;
+    let radius = ((w - 8.0).min(h - label_px - 14.0) / 2.0).max(10.0);
+    let cx = w / 2.0;
+    let cy = radius + 4.0;
+    let frac = (value / 100.0).clamp(0.0, 1.0);
+    let (tr, tg, tb, ta) = crate::theme::track_rgba();
+
+    cr.set_line_cap(gtk::cairo::LineCap::Round);
+    cr.set_line_width(ring);
+    cr.set_source_rgba(tr, tg, tb, if focused { ta * 3.0 } else { ta * 1.4 });
+    cr.arc(cx, cy, radius, START, START + SWEEP);
+    let _ = cr.stroke();
+    if frac > 0.0 {
+        cr.set_source_rgb(rgb.0, rgb.1, rgb.2);
+        cr.arc(cx, cy, radius, START, START + SWEEP * frac);
+        let _ = cr.stroke();
+    }
+    // End marker: where the value sits on the ring.
+    let a = START + SWEEP * frac;
+    let (xr, xg, xb) = crate::theme::text_rgb();
+    cr.set_source_rgb(xr, xg, xb);
+    cr.arc(cx + a.cos() * radius, cy + a.sin() * radius, ring * 0.95, 0.0, 2.0 * PI);
+    let _ = cr.fill();
+
+    // Value, sized so "100" and "11.5 kHz" both fit inside the ring.
+    let layout = widget.create_pango_layout(Some(text));
+    let mut font = pango::FontDescription::from_string("Adwaita Sans");
+    font.set_weight(pango::Weight::Semibold);
+    let long = text.chars().count() > 3;
+    let px = if long { (radius * 0.42).clamp(8.5, 11.0) } else { (radius * 0.62).clamp(10.0, 14.0) };
+    font.set_absolute_size(px * pango::SCALE as f64);
+    layout.set_font_description(Some(&font));
+    let attrs = pango::AttrList::new();
+    attrs.insert(pango::AttrFontFeatures::new("tnum"));
+    attrs.insert(pango::AttrInt::new_letter_spacing(-200));
+    layout.set_attributes(Some(&attrs));
+    let (lw, lh) = layout.pixel_size();
+    cr.move_to(cx - lw as f64 / 2.0, cy - lh as f64 / 2.0);
+    cr.set_source_rgb(xr, xg, xb);
+    pangocairo::functions::show_layout(cr, &layout);
+
+    // Label.
+    let layout = widget.create_pango_layout(Some(label));
+    let mut font = pango::FontDescription::from_string("Adwaita Sans");
+    font.set_weight(pango::Weight::Medium);
+    font.set_absolute_size(label_px * pango::SCALE as f64);
+    layout.set_font_description(Some(&font));
+    layout.set_width((w * pango::SCALE as f64) as i32);
+    layout.set_ellipsize(pango::EllipsizeMode::End);
+    layout.set_alignment(pango::Alignment::Center);
+    let (_, lh) = layout.pixel_size();
+    cr.move_to(0.0, h - lh as f64);
+    cr.set_source_rgba(xr, xg, xb, 0.66);
     pangocairo::functions::show_layout(cr, &layout);
 }

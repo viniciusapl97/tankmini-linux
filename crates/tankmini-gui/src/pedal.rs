@@ -34,8 +34,14 @@ pub fn pedal(app: &AppRef, position: usize, module: usize, realistic: bool) -> g
     } else {
         format!("{}", position + 1)
     };
-    let order = label(&heading, &["tm-eyebrow"]);
-    order.set_hexpand(true);
+    let order = label(&heading, &[if realistic { "tm-eyebrow" } else { "tm-order" }]);
+    if !realistic {
+        order.set_xalign(0.5);
+        order.set_hexpand(false);
+    }
+    if realistic {
+        order.set_hexpand(true);
+    }
     order.set_valign(gtk::Align::Center);
     order.set_tooltip_text(Some(&format!(
         "{} · {} — {}",
@@ -44,6 +50,11 @@ pub fn pedal(app: &AppRef, position: usize, module: usize, realistic: bool) -> g
         role.description()
     )));
     top.append(&order);
+    if !realistic {
+        let spacer = hbox(0);
+        spacer.set_hexpand(true);
+        top.append(&spacer);
+    }
     top.append(&block_tools(app, position, module));
     // The on/off switch lives in the card header: inside the body it cost about
     // 70 px of height per card, which is what pushed the board past a screen.
@@ -297,9 +308,8 @@ pub fn board(app: &AppRef, realistic: bool) -> gtk::FlowBox {
             let flow_c = flow.clone();
             gtk::glib::idle_add_local_once(move || {
                 eprintln!(
-                    "[measure] board flow width={} alloc={}",
-                    flow_c.width(),
-                    flow_c.allocated_width()
+                    "[measure] board flow width={}",
+                    flow_c.width()
                 );
                 let (cmin, cnat, _, _) = card.measure(gtk::Orientation::Horizontal, -1);
                 let mut widest = 0;

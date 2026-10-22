@@ -333,3 +333,26 @@ button.tm-footswitch:active {
 
 /* minimal pedal: pedal shape, app surface */
 .tm-flat-pedal { border-radius: 26px; padding-top: 4px; }
+
+/* block toolbar above cards/pedals: weightless until hovered */
+menubutton.tm-icon > button {
+  border-radius: 999px;
+  min-width: 30px;
+  min-height: 30px;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+  border: none;
+}
+menubutton.tm-icon > button:hover, menubutton.tm-icon > button:checked { background: @tm_surface; }
+.tm-order {
+  min-width: 20px;
+  min-height: 20px;
+  border-radius: 99px;
+  background: @tm_surface;
+  border: 1px solid @tm_hair;
+  font-size: 11px;
+  font-weight: 700;
+  font-feature-settings: "tnum";
+  color: @tm_dim;
+}
