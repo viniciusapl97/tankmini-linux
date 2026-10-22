@@ -99,6 +99,22 @@ cargo run --release -p tankmini-gui
 Useful environment variables: `TANKMINI_DEMO=0` runs with no pedal attached (factory
 table, preset 1A loaded), `TANKMINI_INSTANCE=dev` allows a second, independent window.
 
+## Play along with your computer
+
+The pedal is already a USB audio interface, so playing guitar over a YouTube
+backing track needs no fork and no extra app: PipeWire just has to mix the pedal's
+input into the output you already hear.
+
+```sh
+tools/tankmini-audio.sh headphones   # guitar + system audio in the same headphones
+tools/tankmini-audio.sh pedal        # pedal becomes the default output (phones in the pedal)
+tools/tankmini-audio.sh status       # what PipeWire sees
+```
+
+`headphones` runs a `pw-loopback` at 128 frames (~3 ms) from the pedal's capture to
+your current sink, so the guitar and the video arrive together; Ctrl+C removes it.
+This is the same capture path the tuner screen reads from, so nothing is exclusive.
+
 ## Command line
 
 The GUI and the CLI share one core crate, so anything the app does can be scripted.
