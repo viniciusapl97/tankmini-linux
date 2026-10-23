@@ -1125,6 +1125,7 @@ dependencies = [
  "gtk4",
  "libadwaita",
  "pangocairo",
+ "serde_json",
  "tankmini-core",
 ]
 
