@@ -10,6 +10,7 @@ use tankmini_core::templates;
 use crate::app::{AppRef, Redraw};
 use crate::knob::{Knob, KnobSize};
 use crate::widgets::{clear, dot, hbox, label, section, slot_badge, vbox};
+use gtk::glib;
 
 pub fn refresh(app: &AppRef) {
     let root = &app.ui().play_box;
@@ -26,6 +27,9 @@ pub fn refresh(app: &AppRef) {
     root.append(&clamp);
 
     page.append(&hero(app));
+    if !app.state.borrow().library.entries.is_empty() {
+        page.append(&my_sounds(app));
+    }
     page.append(&macros(app));
     page.append(&quick_blocks(app));
     page.append(&sounds(app));
@@ -43,7 +47,13 @@ fn hero(app: &AppRef) -> gtk::Box {
     texts.set_valign(gtk::Align::Center);
     let letter = ["A", "B", "C"][i % 3];
     texts.append(&label(&format!("BANCO {} · PEDAL {letter}", i / 3 + 1), &["tm-eyebrow"]));
-    let title = label(&st.title(i), &["tm-title-xl"]);
+    let from_library = {
+        drop(st);
+        let n = playing_sound(app);
+        n
+    };
+    let st = app.state.borrow();
+    let title = label(from_library.as_deref().unwrap_or(&st.title(i)), &["tm-title-xl"]);
     title.set_wrap(true);
     texts.append(&title);
     let state_line = hbox(8);
@@ -81,6 +91,152 @@ fn hero(app: &AppRef) -> gtk::Box {
     nav.append(&next);
     row.append(&nav);
     row
+}
+
+thread_local! {
+    /// The library sound last played from "Meus sons", to keep its card lit and
+    /// its notes open across page rebuilds.
+    static PICKED: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// "Meus sons": the library as big cards. One click puts the sound on the pedal
+/// right away (into the selected preset, not saved), and its notes (tuning,
+/// songs to study) show below.
+fn my_sounds(app: &AppRef) -> gtk::Box {
+    let wrap = vbox(0);
+    wrap.append(&section("MEUS SONS"));
+    let hint = label(
+        "Clique num som e ele toca na hora. Embaixo aparece como tocar: afinação e músicas para estudar.",
+        &["tm-small", "tm-dim"],
+    );
+    hint.set_wrap(true);
+    hint.set_xalign(0.0);
+    hint.set_margin_bottom(12);
+    wrap.append(&hint);
+
+    let flow = gtk::FlowBox::new();
+    flow.set_selection_mode(gtk::SelectionMode::None);
+    flow.set_homogeneous(true);
+    flow.set_column_spacing(10);
+    flow.set_row_spacing(10);
+    flow.set_min_children_per_line(1);
+    flow.set_max_children_per_line(4);
+    wrap.append(&flow);
+
+    let notes = vbox(6);
+    notes.add_css_class("tm-card");
+    notes.add_css_class("tm-sound-notes");
+    notes.set_margin_top(12);
+    wrap.append(&notes);
+
+    let entries: Vec<(String, String, String, String)> = {
+        let st = app.state.borrow();
+        st.library
+            .entries
+            .iter()
+            .map(|e| (e.id.clone(), e.name.clone(), e.tags.first().cloned().unwrap_or_default(), e.notes.clone()))
+            .collect()
+    };
+    let picked = PICKED.with(|p| p.borrow().clone());
+    let show_notes = {
+        let notes = notes.clone();
+        move |name: &str, text: &str| {
+            while let Some(c) = notes.first_child() {
+                notes.remove(&c);
+            }
+            notes.append(&label(name, &["tm-title-l"]));
+            for line in text.lines().filter(|l| !l.trim().is_empty()) {
+                // "Afinação: …" / "Para estudar: …" get their label in bold.
+                let l = match line.split_once(':') {
+                    Some((k, v)) if k.len() < 20 => {
+                        let lab = gtk::Label::new(None);
+                        lab.set_markup(&format!(
+                            "<b>{}:</b>{}",
+                            glib::markup_escape_text(k),
+                            glib::markup_escape_text(v)
+                        ));
+                        lab
+                    }
+                    _ => gtk::Label::new(Some(line)),
+                };
+                l.set_wrap(true);
+                l.set_xalign(0.0);
+                notes.append(&l);
+            }
+            notes.set_visible(true);
+        }
+    };
+    notes.set_visible(false);
+    for (id, name, tag, text) in entries {
+        let b = gtk::Button::new();
+        b.add_css_class("tm-sound");
+        let inner = vbox(4);
+        inner.append(&label(&name, &["tm-sound-name"]));
+        let d = label(&card_subtitle(&tag, &text), &["tm-sound-desc"]);
+        d.set_wrap(true);
+        d.set_max_width_chars(26);
+        d.set_width_chars(22);
+        inner.append(&d);
+        b.set_child(Some(&inner));
+        if picked.as_deref() == Some(id.as_str()) {
+            b.add_css_class("picked");
+            show_notes(&name, &text);
+        }
+        let app = app.clone();
+        let show_notes = show_notes.clone();
+        b.connect_clicked(move |b| {
+            let bytes = app.state.borrow().library.get(&id).and_then(|e| e.patch_bytes());
+            let Some(bytes) = bytes else {
+                app.toast("Este som da biblioteca está com defeito.");
+                return;
+            };
+            PICKED.with(|p| *p.borrow_mut() = Some(id.clone()));
+            let mut sibling = b.parent().and_then(|c| c.parent()).and_then(|f| f.first_child());
+            while let Some(child) = sibling {
+                if let Some(btn) = child.first_child() {
+                    btn.remove_css_class("picked");
+                }
+                sibling = child.next_sibling();
+            }
+            b.add_css_class("picked");
+            show_notes(&name, &text);
+            app.edit(None, Redraw::Views, |t, i| {
+                t.set_patch_raw(i, &bytes);
+            });
+            let slot = app.state.borrow().selected;
+            app.toast_undo(&format!("Tocando “{name}” (em {}). Salve na pedaleira se quiser guardar.", SLOT_LABELS[slot]));
+        });
+        flow.insert(&b, -1);
+    }
+    wrap
+}
+
+/// "slipknot · drop B": the tag and the tuning, cut to its first words.
+fn card_subtitle(tag: &str, notes: &str) -> String {
+    let tuning = notes
+        .lines()
+        .find_map(|l| l.strip_prefix("Afinação:"))
+        .map(|t| {
+            let t = t.trim();
+            let end = t.find(['(', ';', '.', ',']).unwrap_or(t.len());
+            t[..end].trim().to_string()
+        });
+    match (tag.is_empty(), tuning) {
+        (false, Some(t)) => format!("{tag} · {t}"),
+        (true, Some(t)) => t,
+        (false, None) => tag.to_string(),
+        (true, None) => String::new(),
+    }
+}
+
+/// The library sound now on the selected preset, if it came from "Meus sons"
+/// and is still unchanged.
+fn playing_sound(app: &AppRef) -> Option<String> {
+    let id = PICKED.with(|p| p.borrow().clone())?;
+    let st = app.state.borrow();
+    let entry = st.library.get(&id)?;
+    let current = st.current()?;
+    (entry.patch_bytes()?.as_slice() == current.raw()).then(|| entry.name.clone())
 }
 
 fn macros(app: &AppRef) -> gtk::Box {

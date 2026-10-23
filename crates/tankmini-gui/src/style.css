@@ -408,3 +408,7 @@ menubutton.tm-icon > button:hover, menubutton.tm-icon > button:checked { backgro
 .tm-volbar-scale trough { min-height: 10px; border-radius: 999px; background: @tm_surface_hi; }
 .tm-volbar-scale highlight { min-height: 10px; border-radius: 999px; background: @tm_text; }
 .tm-volbar-scale slider { min-width: 20px; min-height: 20px; margin: -6px; background: @tm_text; border: 3px solid @tm_surface; box-shadow: none; }
+
+/* Play: "Meus sons" */
+.tm-sound.picked { border-color: @tm_text; box-shadow: inset 0 0 0 1px @tm_text; }
+.tm-sound-notes { padding: 16px 18px; }
