@@ -223,6 +223,7 @@ pub fn build(app: &AppRef) {
     let spacer = hbox(0);
     spacer.set_hexpand(true);
     actions.append(&spacer);
+    actions.append(&crate::audio::button(app, &tuner_shared));
     let bypass_btn = gtk::ToggleButton::with_label("Bypass");
     bypass_btn.add_css_class("tm-pill");
     bypass_btn.add_css_class("tm-ab");

@@ -35,6 +35,13 @@ pub struct Settings {
     /// How Editar draws the blocks: `pedals` (realistic stompboxes),
     /// `flat` (pedal-shaped cards in the app style) or `cards`.
     pub edit_style: String,
+    /// "Ouvir a guitarra no fone": the app routes the pedal's USB audio to
+    /// `monitor_output` while it is open.
+    pub monitor: bool,
+    /// PipeWire sink name to listen on; empty = the system default.
+    pub monitor_output: String,
+    /// Guitar level in that route, percent.
+    pub monitor_guitar: u32,
 }
 
 impl Default for Settings {
@@ -51,6 +58,9 @@ impl Default for Settings {
             onboarded: false,
             view: "play".into(),
             edit_style: "pedals".into(),
+            monitor: false,
+            monitor_output: String::new(),
+            monitor_guitar: 100,
         }
     }
 }

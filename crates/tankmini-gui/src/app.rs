@@ -311,6 +311,7 @@ impl App {
 
     /// Stop the USB thread, letting a write in progress finish first.
     pub fn shutdown(&self) {
+        crate::audio::stop();
         let worker = self.worker.borrow_mut().take();
         drop(worker);
     }

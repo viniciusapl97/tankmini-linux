@@ -6,6 +6,7 @@
 //! (`tankmini_core::worker`); see `app.rs` for the editing model.
 
 mod app;
+mod audio;
 mod dialogs;
 mod edit;
 mod i18n;
@@ -44,6 +45,10 @@ fn main() -> glib::ExitCode {
         rail::wire(&app);
         app.refresh_all();
         app.start();
+        // Demo/screenshot instances must not touch the real audio.
+        if std::env::var_os("TANKMINI_DEMO").is_none() {
+            audio::resume(&app);
+        }
         {
             let app = app.clone();
             application.connect_shutdown(move |_| app.shutdown());

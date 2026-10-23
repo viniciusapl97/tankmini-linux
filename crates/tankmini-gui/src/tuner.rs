@@ -31,6 +31,9 @@ pub struct Shared {
     /// Latest reading of the pedal's own tuner, which runs while this page is
     /// shown. Used when the audio capture has nothing to say.
     pub pedal: Arc<Mutex<Option<tankmini_core::tuner::Reading>>>,
+    /// Peak of the last window of the pedal's audio (f32 bits), for the level
+    /// meter in the headphone panel. 0 when nothing is captured.
+    pub level: Arc<std::sync::atomic::AtomicU32>,
 }
 
 impl Shared {
@@ -40,6 +43,7 @@ impl Shared {
             capturing: Arc::new(AtomicBool::new(false)),
             a4: Arc::new(Mutex::new(a4)),
             pedal: Arc::new(Mutex::new(None)),
+            level: Arc::new(std::sync::atomic::AtomicU32::new(0)),
         }
     }
 }
@@ -115,6 +119,8 @@ pub fn start(shared: &Shared) {
                         .chunks_exact(4)
                         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
                         .collect();
+                    let peak = samples.iter().fold(0f32, |m, s| m.max(s.abs()));
+                    shared.level.store(peak.to_bits(), Ordering::Relaxed);
                     let a4 = *shared.a4.lock().unwrap();
                     let measured = pitch::detect(&samples, RATE)
                         .map(|p| pitch::pitch_from_hz(p.hz, a4, p.rms));
@@ -123,6 +129,7 @@ pub fn start(shared: &Shared) {
             }
             let _ = child.kill();
             shared.capturing.store(false, Ordering::Relaxed);
+            shared.level.store(0, Ordering::Relaxed);
             std::thread::sleep(std::time::Duration::from_millis(500));
         }
     });
