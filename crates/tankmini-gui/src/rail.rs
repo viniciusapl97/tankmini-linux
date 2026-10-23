@@ -1,10 +1,9 @@
 //! Sidebar: the 21 presets on the pedal, the local library and setlists.
 
 use adw::prelude::*;
-use tankmini_core::catalog::Instrument;
 use tankmini_core::patch::{PATCH_COUNT, SLOT_LABELS};
 
-use crate::app::{AppRef, RailTab, Redraw};
+use crate::app::{AppRef, RailTab};
 use crate::widgets::{clear, dot, hbox, label, slot_badge, vbox};
 
 /// Widgets of one preset row that change without a rebuild.
@@ -160,56 +159,50 @@ fn library(app: &AppRef) {
         return;
     }
     for e in found {
+        // The whole row plays the sound: no jargon button, the name gets the room.
         let row = gtk::ListBoxRow::new();
-        row.set_activatable(false);
-        let line = hbox(10);
+        row.set_activatable(true);
+        let line = hbox(8);
+        line.set_margin_top(4);
+        line.set_margin_bottom(4);
         let texts = vbox(1);
         texts.set_hexpand(true);
         let title = label(&e.name, &["tm-row-title"]);
-        title.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        let instrument = Instrument::from_key(&e.instrument).map(|i| i.label()).unwrap_or("—");
-        let mut sub = instrument.to_string();
-        if !e.tags.is_empty() {
-            sub.push_str(" · ");
-            sub.push_str(&e.tags.join(", "));
-        }
-        let sub_text = sub.clone();
+        title.set_wrap(true);
+        title.set_xalign(0.0);
+        let first_line = e.notes.lines().next().unwrap_or("").trim().to_string();
+        let sub_text = if first_line.is_empty() { e.tags.join(", ") } else { first_line };
         let sub = label(&sub_text, &["tm-row-sub"]);
-        sub.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        sub.set_wrap(true);
+        sub.set_xalign(0.0);
         texts.append(&title);
         texts.append(&sub);
-        // The title and subtitle ellipsize in a narrow rail: keep the full text
-        // reachable through a tooltip.
-        let tip = if e.notes.is_empty() {
-            format!("{} — {}", e.name, sub_text)
+        if !e.notes.is_empty() {
+            row.set_tooltip_text(Some(&e.notes));
+        }
+        if e.favorite {
+            let star = gtk::Image::from_icon_name("starred-symbolic");
+            star.set_valign(gtk::Align::Center);
+            line.append(&texts);
+            line.append(&star);
         } else {
-            format!("{} — {}\n{}", e.name, sub_text, e.notes)
-        };
-        row.set_tooltip_text(Some(&tip));
-        let star = gtk::ToggleButton::new();
-        star.set_icon_name(if e.favorite { "starred-symbolic" } else { "non-starred-symbolic" });
-        star.set_active(e.favorite);
-        star.add_css_class("tm-icon");
-        star.set_tooltip_text(Some("Favorito"));
-        star.set_valign(gtk::Align::Center);
-        let use_btn = gtk::Button::with_label(&format!("Usar em {}", SLOT_LABELS[st.selected]));
-        use_btn.add_css_class("tm-pill");
-        use_btn.set_valign(gtk::Align::Center);
-        use_btn.set_tooltip_text(Some("Coloca este som no preset selecionado (salve para gravar)"));
+            line.append(&texts);
+        }
         let more = gtk::MenuButton::new();
         more.set_icon_name("view-more-symbolic");
         more.add_css_class("tm-icon");
         more.set_valign(gtk::Align::Center);
+        more.set_tooltip_text(Some("Favoritar ou excluir"));
         let pop = gtk::Popover::new();
         let pbox = vbox(2);
+        let fav = gtk::Button::with_label(if e.favorite { "Tirar dos favoritos" } else { "Favoritar" });
+        fav.add_css_class("flat");
         let del = gtk::Button::with_label("Excluir da biblioteca");
         del.add_css_class("flat");
+        pbox.append(&fav);
         pbox.append(&del);
         pop.set_child(Some(&pbox));
         more.set_popover(Some(&pop));
-        line.append(&texts);
-        line.append(&star);
-        line.append(&use_btn);
         line.append(&more);
         row.set_child(Some(&line));
         list.append(&row);
@@ -218,32 +211,19 @@ fn library(app: &AppRef) {
         {
             let app = app.clone();
             let id = id.clone();
-            star.connect_toggled(move |b| {
+            let pop = pop.clone();
+            fav.connect_clicked(move |_| {
+                pop.popdown();
                 if let Some(e) = app.state.borrow_mut().library.get_mut(&id) {
-                    e.favorite = b.is_active();
+                    e.favorite = !e.favorite;
                 }
                 app.save_library();
                 let app = app.clone();
                 gtk::glib::idle_add_local_once(move || refresh(&app));
             });
         }
-        {
-            let app = app.clone();
-            let id = id.clone();
-            use_btn.connect_clicked(move |_| {
-                let entry = app.state.borrow().library.get(&id).cloned();
-                let Some(entry) = entry else { return };
-                let Some(bytes) = entry.patch_bytes().filter(|b| tankmini_core::patch::validate_patch(b).is_ok()) else {
-                    app.toast("Este som está corrompido na biblioteca.");
-                    return;
-                };
-                app.edit(None, Redraw::Views, |t, i| {
-                    t.set_patch_raw(i, &bytes);
-                });
-                let slot = app.state.borrow().selected;
-                app.toast_undo(&format!("“{}” em {}. Salve para gravar na pedaleira.", entry.name, SLOT_LABELS[slot]));
-            });
-        }
+        // The list's row-activated (wired once in window.rs) reads the id here.
+        row.set_widget_name(&id);
         {
             let app = app.clone();
             del.connect_clicked(move |_| {

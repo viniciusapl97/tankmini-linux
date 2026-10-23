@@ -413,6 +413,15 @@ fn wire(app: &AppRef) {
     let ui = app.ui();
     {
         let app = app.clone();
+        ui.library_list.connect_row_activated(move |_, row| {
+            let id = row.widget_name();
+            if !id.is_empty() {
+                crate::play::play_library_sound(&app, &id);
+            }
+        });
+    }
+    {
+        let app = app.clone();
         ui.modes.connect_active_name_notify(move |g| {
             let view = match g.active_name().as_deref() {
                 Some("edit") => View::Edit,

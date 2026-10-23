@@ -185,30 +185,29 @@ fn my_sounds(app: &AppRef) -> gtk::Box {
         let app = app.clone();
         let show_notes = show_notes.clone();
         b.connect_clicked(move |b| {
-            let bytes = app.state.borrow().library.get(&id).and_then(|e| e.patch_bytes());
-            let Some(bytes) = bytes else {
-                app.toast("Este som da biblioteca está com defeito.");
-                return;
-            };
-            PICKED.with(|p| *p.borrow_mut() = Some(id.clone()));
-            let mut sibling = b.parent().and_then(|c| c.parent()).and_then(|f| f.first_child());
-            while let Some(child) = sibling {
-                if let Some(btn) = child.first_child() {
-                    btn.remove_css_class("picked");
-                }
-                sibling = child.next_sibling();
-            }
             b.add_css_class("picked");
             show_notes(&name, &text);
-            app.edit(None, Redraw::Views, |t, i| {
-                t.set_patch_raw(i, &bytes);
-            });
-            let slot = app.state.borrow().selected;
-            app.toast_undo(&format!("Tocando “{name}” (em {}). Salve na pedaleira se quiser guardar.", SLOT_LABELS[slot]));
+            play_library_sound(&app, &id);
         });
         flow.insert(&b, -1);
     }
     wrap
+}
+
+/// Put a library sound on the pedal now (selected preset, not saved) and
+/// remember it so "Meus sons" lights its card and the header shows its name.
+pub fn play_library_sound(app: &AppRef, id: &str) {
+    let entry = app.state.borrow().library.get(id).cloned();
+    let Some(entry) = entry else { return };
+    let Some(bytes) = entry.patch_bytes().filter(|b| tankmini_core::patch::validate_patch(b).is_ok()) else {
+        app.toast("Este som da biblioteca está com defeito.");
+        return;
+    };
+    PICKED.with(|p| *p.borrow_mut() = Some(id.to_string()));
+    app.edit(None, Redraw::Views, |t, i| {
+        t.set_patch_raw(i, &bytes);
+    });
+    app.toast_undo(&format!("Tocando “{}”. Para guardar na pedaleira, use Salvar na pedaleira.", entry.name));
 }
 
 /// "slipknot · drop B": the tag and the tuning, cut to its first words.
